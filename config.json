@@ -16,8 +16,8 @@
   "galleryMedia": ["./assets/qa-gallery-1.png", "./assets/qa-gallery-2.png"],
   "typeCoverageMedia": [
     "./assets/qa-gallery-3.png",
-    "./assets/qa-tiny.jpg",
-    "./assets/qa-tiny.webp"
+    "./assets/qa-sample.jpg",
+    "./assets/qa-sample.webp"
   ],
   "bonusImage": "./assets/qa-bonus.png",
   "artistQuoteTitle": "Automated QA Quote",
