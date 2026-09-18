@@ -858,13 +858,36 @@ async function main() {
       if (!sweepPosts.length) logWarn('no POST to a /sweeps URL observed after CREATE SWEEPS (see createNetwork in report.json)');
       const url = currentUrl();
       if (!/\/admin\/sweeps/i.test(url)) throw new Error(`Create did not return to /admin/sweeps. Current URL: ${url}`);
+      if (sweepPosts.length) {
+        const detail = requestDetails(sweepPosts[sweepPosts.length - 1].index);
+        fs.writeFileSync(path.join(resultsDir, 'create-request.txt'), detail);
+        report.createNetwork.detailFile = path.join(resultsDir, 'create-request.txt');
+        report.createNetwork.detail = detail.slice(0, 1500);
+      }
     });
 
     await step(report, 'Open created sweep storefront', async () => {
-      fill(locator('placeholder', 'Search sweeps...'), sweepTitle);
-      await sleep(900);
+      try {
+        fillFirstAvailable([
+          locator('placeholder', 'Search sweeps...'),
+          locator('placeholder', 'Search sweeps'),
+          locator('placeholder', 'Search...'),
+          locator('placeholder', 'Search')
+        ], sweepTitle, 'sweeps search');
+        await sleep(900);
+      } catch (e) {
+        logWarn(`sweeps search box not filled (${String(e.message).split('\n')[0]}); continuing with the unfiltered listing`);
+      }
       assertContains(bodyText(), sweepTitle, 'Created sweep');
-      publicUrl = publicUrlFromAdminRow(sweepTitle);
+      const row = sweepsRowSnapshot(sweepTitle);
+      report.sweepsRow = row;
+      if (row.found) {
+        logInfo(`admin row for ${sweepTitle}: ${(row.cells || []).join(' | ')}`);
+        logInfo(`row links -> sweeps: ${row.sweepsLink || 'n/a'} | free entry: ${row.freeEntryLink || 'n/a'} | tracking: ${row.trackingLink || 'n/a'}`);
+      } else {
+        logWarn(`admin listing did not expose a <tr> for ${sweepTitle} (search box filtering?); falling back to sweeps-link lookup`);
+      }
+      publicUrl = (row.found && row.sweepsLink && !/partners\./i.test(row.sweepsLink)) ? row.sweepsLink : publicUrlFromAdminRow(sweepTitle);
       goto(publicUrl);
       await sleep(1600);
       const body = bodyText();
@@ -940,7 +963,8 @@ async function main() {
         const seen = networkSince(mark, { includeStatic: true });
         const cartPosts = seen.filter(r => r.method === 'POST' && /\/cart\b/i.test(r.url));
         const ok = cartPosts.some(r => r.status !== -1 && (r.status === null || r.status < 400));
-        const cart = cartState();
+        let cart = null;
+        try { cart = cartState(); } catch (e) { logWarn(`cart state unavailable after button ${i + 1}: ${String(e.message).split('\n')[0]}`); }
         cartResults.push({
           index: i,
           text: clean(buttonTexts[i]),
