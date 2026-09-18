@@ -1,0 +1,26 @@
+[      86ms] [LOG] {shopDomain: mels-natural-staging.myshopify.com, shopUrl: https://mels-natural-staging.myshopify.com, branding: Object, translations: Object, settings: Object} @ https://mels-natural-staging.myshopify.com/pages/contact?view=gut-wellness:311
+[     431ms] [WARNING] In a sandboxed environment, addEventListener may not behave as expected. @ https://mels-natural-staging.myshopify.com/web-pixels@0a3c9e70wd8b01bb2p898e1257m7e92acc4/custom/web-pixel-shopify-custom-pixel@0530/sandbox/modern/pages/contact?view=gut-wellness:6
+[     574ms] [LOG] this is the plan of user true @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[     575ms] [LOG] true @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[     575ms] [LOG] RGB Background Brightness: 1 @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[     575ms] [LOG] testing deployment @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[     575ms] [LOG] 🚀 ~ setCssBrandingVariables ~ isDarkTheme: false {starColor: #FF6B2B, starStyle: rounded, buttonColor: #FF6B2B, buttonTextColor: #FFFFFF, buttonBorderRadius: 4} @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[    1658ms] [LOG] this is the plan of user free @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[    1659ms] [LOG] free @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[    1659ms] [LOG] RGB Background Brightness: 1 @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[    1659ms] [LOG] testing deployment @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[    1659ms] [LOG] 🚀 ~ setCssBrandingVariables ~ isDarkTheme: false {starColor: #FF6B2B, starStyle: rounded, buttonColor: #FF6B2B, buttonTextColor: #FFFFFF, buttonBorderRadius: 4} @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   88407ms] [LOG] recaptchacompat disabled @ https://js.hcaptcha.com/1/api.js?render=explicit&recaptchacompat=off&onload=__shopify_hcap_load_bgowjwrk:3
+[   88421ms] [WARNING] navigator.modelContext is deprecated. Please use document.modelContext instead. @ https://js.hcaptcha.com/1/api.js?render=explicit&recaptchacompat=off&onload=__shopify_hcap_load_bgowjwrk:3
+[   94872ms] [LOG] {shopDomain: mels-natural-staging.myshopify.com, shopUrl: https://mels-natural-staging.myshopify.com, branding: Object, translations: Object, settings: Object} @ https://mels-natural-staging.myshopify.com/pages/contact?view=gut-wellness:311
+[   95137ms] [WARNING] In a sandboxed environment, addEventListener may not behave as expected. @ https://mels-natural-staging.myshopify.com/web-pixels@0a3c9e70wd8b01bb2p898e1257m7e92acc4/custom/web-pixel-shopify-custom-pixel@0530/sandbox/modern/pages/contact?view=gut-wellness:6
+[   95183ms] [LOG] this is the plan of user true @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   95184ms] [LOG] true @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   95184ms] [LOG] RGB Background Brightness: 1 @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   95184ms] [LOG] testing deployment @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   95184ms] [LOG] 🚀 ~ setCssBrandingVariables ~ isDarkTheme: false {starColor: #FF6B2B, starStyle: rounded, buttonColor: #FF6B2B, buttonTextColor: #FFFFFF, buttonBorderRadius: 4} @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   96302ms] [LOG] this is the plan of user free @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   96302ms] [LOG] free @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   96302ms] [LOG] RGB Background Brightness: 1 @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   96302ms] [LOG] testing deployment @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
+[   96302ms] [LOG] 🚀 ~ setCssBrandingVariables ~ isDarkTheme: false {starColor: #FF6B2B, starStyle: rounded, buttonColor: #FF6B2B, buttonTextColor: #FFFFFF, buttonBorderRadius: 4} @ https://cdn.chazify.com/reviews/static/bundle_v80/script.bundle.js:40
