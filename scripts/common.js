@@ -205,32 +205,79 @@ function galleryTileCount() {
 }
 
 function listComboboxOptions() {
-  const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('[role="option"], [role="menuitemcheckbox"], [role="menuitem"], [data-slot="select-item"], [data-radix-collection-item]')].map(e => ({ text: (e.innerText || '').trim().slice(0, 160), html: e.innerHTML.trim().slice(0, 400) })).filter(o => o.text).slice(0, 40))`);
+  const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll(${JSON.stringify(OPTION_SELECTOR)})].map(e => ({ text: (e.innerText || '').trim().slice(0, 160), html: e.innerHTML.trim().slice(0, 400) })).filter(o => o.text).slice(0, 40))`);
   try { return JSON.parse(raw || '[]'); } catch (_) { return []; }
+}
+
+const OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"][data-value], [data-slot="select-item"], [data-radix-collection-item]';
+
+function comboNorm(value) {
+  return String(value === undefined || value === null ? '' : value).toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+/** Best-effort index of `wanted` inside an option list: exact, then contains, then reverse-contains. */
+function matchOptionIndex(options, wanted) {
+  if (!wanted || !String(wanted).trim()) return 0;
+  const w = comboNorm(wanted);
+  let idx = options.findIndex(o => comboNorm(o.text) === w);
+  if (idx === -1) idx = options.findIndex(o => comboNorm(o.text).includes(w));
+  if (idx === -1) idx = options.findIndex(o => w.includes(comboNorm(o.text)) && comboNorm(o.text).length > 2);
+  return idx;
+}
+
+/** Type into the popup's filter input (cmdk / Radix combobox search), if one exists. */
+function fillPopupSearch(text) {
+  const code = `async page => {
+    const visible = el => !!el && el.offsetParent !== null && !el.readOnly && !el.disabled;
+    const pick = () => {
+      const first = [...document.querySelectorAll('input[cmdk-input], input[placeholder*="Search" i], input[placeholder*="search" i]')].find(visible);
+      if (first) return first;
+      const boxes = [...document.querySelectorAll('input')].filter(el => visible(el) && (el.type === 'text' || el.type === '' || el.type === 'search'));
+      return boxes[boxes.length - 1] || null;
+    };
+    const el = pick();
+    if (!el) return 'no-input';
+    await el.click();
+    await el.fill(${JSON.stringify(String(text))});
+    return 'ok';
+  }`;
+  return runCode(code);
 }
 
 async function selectCombobox({ comboboxTarget, preferredName, label }) {
   click(comboboxTarget);
   await sleep(900);
-  const options = listComboboxOptions();
+  const name = label || 'Combobox';
+  const want = preferredName ? String(preferredName).trim() : '';
+  let options = listComboboxOptions();
+  let idx = options.length ? matchOptionIndex(options, want) : -1;
+  let filteredBy = '';
+
+  if (idx === -1) {
+    // Radix/cmdk lists only render options once you type, so retry with progressively shorter queries.
+    const queries = [want, want.split(/\s+/)[0], want.slice(0, Math.max(3, Math.ceil(want.length / 2)))].filter((q, i, arr) => q && arr.indexOf(q) === i);
+    for (const q of queries) {
+      if (!String(fillPopupSearch(q)).includes('ok')) break;
+      await sleep(900);
+      options = listComboboxOptions();
+      idx = options.length ? matchOptionIndex(options, want) : -1;
+      if (idx !== -1) { filteredBy = q; break; }
+    }
+  }
+
   if (!options.length) {
-    // dump a hint for debugging
     const snapshot = cli(['snapshot'], { allowFailure: true }).stdout || '';
-    throw new Error(`${label || 'Combobox'}: dropdown opened but no options detected. Set the exact name env var. Snapshot head: ${snapshot.slice(0, 400)}`);
+    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Set the exact name env var. Snapshot head: ${snapshot.slice(0, 400)}`);
   }
-  let idx = 0;
-  if (preferredName && preferredName.trim()) {
-    const want = preferredName.trim().toLowerCase();
-    const found = options.findIndex(o => o.text.toLowerCase() === want || o.text.toLowerCase().includes(want));
-    if (found === -1) throw new Error(`${label || 'Combobox'}: preferred option ${JSON.stringify(preferredName)} not in [${options.map(o => JSON.stringify(o.text)).join(', ')}]`);
-    idx = found;
+  if (idx === -1) {
+    throw new Error(`${name}: preferred option ${JSON.stringify(preferredName)} not in [${options.map(o => JSON.stringify(o.text)).join(', ')}]`);
   }
+
   const chosen = options[idx];
-  const clickCode = `async page => { await page.locator('[role="option"], [role="menuitemcheckbox"], [role="menuitem"], [data-slot="select-item"], [data-radix-collection-item]').nth(${idx}).click(); return 'ok'; }`;
-  runCode(clickCode);
+  runCode(`async page => { await page.locator(${JSON.stringify(OPTION_SELECTOR)}).nth(${idx}).click(); return 'ok'; }`);
   await sleep(700);
-  logInfo(`${label || 'Combobox'} selected [${idx}]: ${chosen.text}`);
-  return { index: idx, text: chosen.text, innerHTML: chosen.html, optionsCount: options.length, options: options.map(o => o.text) };
+  logInfo(`${name} selected [${idx}]${filteredBy ? ` (filtered by ${JSON.stringify(filteredBy)})` : ''}: ${chosen.text}`);
+  return { index: idx, text: chosen.text, innerHTML: chosen.html, optionsCount: options.length, options: options.map(o => o.text), filteredBy };
 }
 
 function fillRichTextLast(value) {
@@ -595,7 +642,7 @@ module.exports = {
   listComboboxOptions, selectCombobox,
   fillRichTextLast, fillRichTextByPlaceholder, waitForText,
   parseRequestLines, networkList, networkMark, networkSince, requestDetails, networkSummary,
-  parseJson, readValues, switchList, findSwitch, ensureSwitch,
+  comboNorm, parseJson, readValues, switchList, findSwitch, ensureSwitch,
   entryTierSnapshot, reviewSnapshot, sweepsRowSnapshot, cartState, storefrontSnapshot,
   normalizeCdnKey, fillTextareaByPlaceholder, fillRichTextAny, listMenuOptions, selectMenuOption
 };

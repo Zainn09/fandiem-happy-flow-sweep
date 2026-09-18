@@ -12,18 +12,31 @@
   "charityPartnerName": "",
   "sweepTitlePrefix": "QA-AUTO-FANDIEM",
   "allowMutations": true,
-  "coverMedia": ["./assets/qa-cover.png"],
-  "galleryMedia": ["./assets/qa-gallery-1.png", "./assets/qa-gallery-2.png"],
+  "coverMedia": [
+    "./assets/qa-cover.png"
+  ],
+  "galleryMedia": [
+    "./assets/qa-gallery-1.png",
+    "./assets/qa-gallery-2.png"
+  ],
   "typeCoverageMedia": [
     "./assets/qa-gallery-3.png",
     "./assets/qa-sample.jpg",
     "./assets/qa-sample.webp"
   ],
   "bonusImage": "./assets/qa-bonus.png",
+  "customTierEntries": "500",
+  "customTierPrice": "75",
+  "numberOfWinners": "1",
+  "numberOfGuests": "2",
+  "prizeValue": "$5,000",
+  "minimumAge": "18",
+  "eligibleCountries": "Open to legal residents of the United States only",
+  "winnerAnnouncementContent": "",
   "artistQuoteTitle": "Automated QA Quote",
   "artistQuote": "Happy-flow artist quote created by browser-only automated testing.",
   "charitySubtitle": "Automated donation support text for happy flow.",
-  "campaignDescription": "Happy case flow — automated QA sweep description created for testing. Verified later on the storefront.",
+  "campaignDescription": "Happy case flow \u2014 automated QA sweep description created for testing. Verified later on the storefront.",
   "timeouts": {
     "actionMs": 30000,
     "navigationMs": 60000,

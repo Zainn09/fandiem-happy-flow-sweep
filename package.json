@@ -8,6 +8,7 @@
     "attach": "node scripts/attach.js",
     "test": "node scripts/run.js",
     "dry": "node scripts/run.js --dry-run",
+    "report": "node scripts/report.js",
     "detach": "node scripts/detach.js"
   },
   "devDependencies": {

@@ -12,7 +12,7 @@ const {
   fillRichTextByPlaceholder, waitForText,
   parseJson, readValues, ensureSwitch, findSwitch, switchList,
   entryTierSnapshot, reviewSnapshot, sweepsRowSnapshot, cartState, storefrontSnapshot,
-  normalizeCdnKey, fillTextareaByPlaceholder, fillRichTextAny, selectMenuOption,
+  normalizeCdnKey, comboNorm, fillTextareaByPlaceholder, fillRichTextAny, selectMenuOption,
   networkMark, networkSince, networkSummary, requestDetails
 } = require('./common');
 
@@ -402,6 +402,14 @@ async function fillPartners(report) {
     preferredName: talentPreferred,
     label: 'Talent partner'
   });
+
+  // The chosen partner must render as a removable badge (PDF: aria-label "Remove 5B ARTISTS").
+  const badges = parseJson(evalPage(`() => JSON.stringify([...document.querySelectorAll('[aria-label^="Remove"]')].map(e => e.getAttribute('aria-label')))`), []);
+  report.partnersBadges = badges;
+  const wantBadge = comboNorm(talent.text);
+  const badgeHit = badges.find(b => comboNorm(b).includes(wantBadge) || wantBadge.includes(comboNorm(b).replace(/^remove/, '')));
+  if (badgeHit) logInfo(`talent badge present: ${badgeHit}`);
+  else logWarn(`no Remove-badge matched talent ${JSON.stringify(talent.text)}; badges on page: ${badges.join(', ') || 'none'}`);
 
   // Quote fields.
   fillFirstAvailable(

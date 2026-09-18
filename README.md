@@ -20,8 +20,16 @@ Browser-only Fandiem sweep happy-flow automation against your **existing logged-
    - Description `[data-placeholder="Describe the experience in detail..."]` rich text — happy-flow text, verified on storefront.
    - **CONTINUE** `button[data-slot="button"][data-variant="gradient"][data-size="lg"]` — visible errors captured on click; must land on Partners.
 3. **Partners**: first `button[type="button"][role="combobox"]` (talent, required) → `promoContent.artistQuoteTitle` + `promoContent.artistQuote` → second combobox (charity) → `charitySetup.charitySubtitle`. Both selections (text + innerHTML) saved to the report and checked on the storefront.
-4. **Promotion Tabs** ×2 → **Prize Details** ×1 → **Entry Tiers** (custom tier) → **Bonuses** (title + description + image upload) → **Sweeps Info** → **Tracking & Visibility** (unchanged) → **Review & Submit** (validates everything, asserts no "needs your attention").
-5. **CREATE SWEEPS** → admin listing search → open public **storefront** → verify title, description snippet, talent, charity, media count/order → click every `#add-to-cart-btn` and assert a `POST /cart` request each time.
+4. **Promotion Tabs** — `Add Promotion Tab` modal twice (title + plain-textarea description + optional raw-HTML switch; save, reopen, add a second). Promotion tabs are optional, so a failed tab is logged with the visible error instead of killing the run.
+5. **Prize Details** — `Add Prize Detail` modal: emoji (`maxlength=4`) + rich-text description, saved with the modal's own submit button (the heading reads *Add Price Detail*).
+6. **Entry Tiers** — tiers 0–3 are locked; `Add Entry Tier` appends tier N, which is then filled (`entryTiers.tiers.N.entries|price|impact`) and read back to prove it persisted.
+7. **Bonuses** — `Add Bonus` modal: required Title + rich-text Description + required Bonus Image, plus optional entry-tier linking through the dropdown menu (already-linked tiers are disabled and skipped).
+8. **Sweeps Info** — `prizeDetails.*` + `rulesDates.*` (incl. `drawDate`, `winnerAnnouncementContent`); `Auto-calculate Drawing Date` is forced off and every field is read back.
+9. **Tracking & Visibility** — untouched, just CONTINUE.
+10. **Review & Submit** — every section card is parsed (`review.sections`) and each entered value is asserted to appear in its section; anything the page still flags as *needs your attention* / *No …, added* is recorded and logged.
+11. **CREATE SWEEPS** — clicks the `type=submit` button, captures the POSTs + redirect back to `/admin/sweeps` (`--static` so document posts are visible), fails on 4xx/5xx.
+12. **Storefront** — the admin row's sweeps-link anchor opens `https://fandiem.co/sweeps/<slug>`; reward, eligible countries, minimum age, custom tier and the winner announcement are asserted, media order/count compared with the upload order.
+13. **Cart** — every `#add-to-cart-btn` is clicked and must produce a successful `POST /cart` inside a `requests --static` window; per-button evidence (request lines, cart item count) goes to `cart-results.json`.
 
 ## Upload strategy (the previous failure point)
 
@@ -82,13 +90,30 @@ Validates config, assets, and title building without touching the browser or the
 npm test
 ```
 
-Overrides:
+Overrides (all optional):
 
 ```powershell
 $env:SWEEP_TITLE="QA-AUTO-FANDIEM-001"
 $env:TALENT_PARTNER_NAME="Exact Talent Name"
 $env:CHARITY_PARTNER_NAME="Exact Charity Name"
+$env:CUSTOM_TIER_ENTRIES="500"      # Entry Tiers
+$env:CUSTOM_TIER_PRICE="75"
+$env:NUMBER_OF_WINNERS="1"          # Sweeps Info
+$env:NUMBER_OF_GUESTS="2"
+$env:PRIZE_VALUE="$5,000"
+$env:MINIMUM_AGE="18"
+$env:ELIGIBLE_COUNTRIES="Open to legal residents of the United States only"
+$env:WINNER_ANNOUNCEMENT="Congratulations …"
 npm test
+```
+
+Defaults for all of these live in `config.json`.
+
+## 6b. Summarize the run
+
+```powershell
+npm run report          # compact per-screen summary of the last run
+npm run report -- --full  # also prints every review row
 ```
 
 Creates real sweep data — run only against the intended test env. Talent defaults to `expectedTalentPartner` with fallback to first available; charity defaults to first available.
@@ -114,8 +139,10 @@ Add MP4/MOV files there and list them in `config.json` (`coverMedia`, `galleryMe
 
 ```text
 results/
-├── report.json            # steps, title, selections (talent/charity + innerHTML), media order + strategies, storefront checks, public URL
-├── cart-results.json      # per add-to-cart-button POST /cart observation
+├── report.json            # steps, title, data entered, selections, media order + strategies, promotionTabs,
+│                          # prizeDetail, entryTiers, bonus, sweepsInfo (+switches), review sections + checks,
+│                          # createNetwork (POSTs + redirect), storefront checks/snapshot, public URL
+├── cart-results.json      # per add-to-cart-button POST /cart observation (request lines + cart item count)
 ├── run-counter-*.json     # per-day run counter backing the NNN in titles
 └── *.png                  # per-step screenshots + FAILED captures
 ```
@@ -125,6 +152,9 @@ results/
 - **Gallery still empty**: open `report.json` → `media.strategies` / last FAILED screenshot; the error lists all 3 strategies' outcomes. Most common cause is the site's file-input index shifting — `media.fileInputs` in the report shows the live inputs.
 - **Talent/charity not found**: the exact live option names are in `report.json` (`selections.*.options`); set them via env vars and re-run.
 - **Stuck on attach**: re-run `npm run attach`, click **Allow & select** in Chrome within 60s, or set `extensionToken`.
+- **Talent/charity combobox**: the picker filters server-side, so the code opens it, types the name into the popup's search box when the first option list has no match (exact → contains → short prefix), and records `filteredBy` + every available option. If the badge `Remove <name>` never appears, the run logs a warning with all `Remove …` badges found.
+- **Review says "N step(s) need your attention"**: the run records which section is flagged (with the row values) and still submits — that banner is how the previous manual attempt silently shipped empty Promotion Tabs / Prize Details / Bonuses.
+- **Cart button shows no POST**: `requests` hides successful document posts by default; the run captures with `--static`, and `cart-results.json` keeps the raw request lines for each button so you can see exactly what the click did.
 
 ## 10. Security
 
