@@ -8,13 +8,27 @@
   "adminBaseUrl": "https://partners.fandiem.co",
   "publicBaseUrl": "https://fandiem.co",
   "expectedTalentPartner": "5B ARTISTS",
+  "talentPartnerName": "",
+  "charityPartnerName": "",
   "sweepTitlePrefix": "QA-AUTO-FANDIEM",
   "allowMutations": true,
-  "charityPartnerName": "",
+  "coverMedia": ["./assets/qa-cover.png"],
+  "galleryMedia": ["./assets/qa-gallery-1.png", "./assets/qa-gallery-2.png"],
+  "typeCoverageMedia": [
+    "./assets/qa-gallery-3.png",
+    "./assets/qa-tiny.jpg",
+    "./assets/qa-tiny.webp"
+  ],
   "bonusImage": "./assets/qa-bonus.png",
+  "artistQuoteTitle": "Automated QA Quote",
+  "artistQuote": "Happy-flow artist quote created by browser-only automated testing.",
+  "charitySubtitle": "Automated donation support text for happy flow.",
+  "campaignDescription": "Happy case flow — automated QA sweep description created for testing. Verified later on the storefront.",
   "timeouts": {
     "actionMs": 30000,
     "navigationMs": 60000,
-    "flowMs": 45000
+    "flowMs": 45000,
+    "uploadMs": 60000,
+    "pollMs": 500
   }
 }
