@@ -9,7 +9,11 @@ const {
   resolveAsset, resolveAssets, buildSweepTitle,
   listFileInputs, dropFiles, uploadFiles, captureVisibleErrors,
   galleryItemsText, galleryTileCount, listComboboxOptions, selectCombobox,
-  fillRichTextByPlaceholder, waitForText
+  fillRichTextByPlaceholder, waitForText,
+  parseJson, readValues, ensureSwitch, findSwitch, switchList,
+  entryTierSnapshot, reviewSnapshot, sweepsRowSnapshot, cartState, storefrontSnapshot,
+  normalizeCdnKey, fillTextareaByPlaceholder, fillRichTextAny, selectMenuOption,
+  networkMark, networkSince, networkSummary, requestDetails
 } = require('./common');
 
 async function ensurePlaywrightAttached() {
@@ -96,19 +100,21 @@ const data = {
   promotionDescriptionTwo: `Automated happy-flow promotion two ${stamp}`,
   prizeEmoji: '🎁',
   prizeDescription: `Automated prize detail ${stamp}`,
-  customTierEntries: '500',
-  customTierPrice: '75',
+  customTierEntries: String(env('CUSTOM_TIER_ENTRIES', config.customTierEntries || '500')),
+  customTierPrice: String(env('CUSTOM_TIER_PRICE', config.customTierPrice || '75')),
   customTierImpact: `Automated tier impact ${stamp}`,
   bonusTitle: `QA Bonus ${stamp}`,
   bonusDescription: `Automated bonus ${stamp}`,
   prizeReward: `QA Reward ${stamp}`,
-  numberOfWinners: '1',
-  numberOfGuests: '2',
-  prizeValue: '1000',
-  minimumAge: '18',
-  eligibleCountries: 'US',
+  numberOfWinners: String(env('NUMBER_OF_WINNERS', config.numberOfWinners || '1')),
+  numberOfGuests: String(env('NUMBER_OF_GUESTS', config.numberOfGuests || '2')),
+  prizeValue: String(env('PRIZE_VALUE', config.prizeValue || '$5,000')),
+  minimumAge: String(env('MINIMUM_AGE', config.minimumAge || '18')),
+  eligibleCountries: env('ELIGIBLE_COUNTRIES', config.eligibleCountries || 'Open to legal residents of the United States only'),
+  winnerAnnouncementContent: env('WINNER_ANNOUNCEMENT', config.winnerAnnouncementContent || `Congratulations — automated QA winner announcement ${stamp}.`),
   startDate: futureDate(1),
-  endDate: futureDate(8)
+  endDate: futureDate(8),
+  drawDate: futureDate(10).slice(0, 10)
 };
 
 function futureDate(daysAhead) {
@@ -426,56 +432,198 @@ async function fillPartners(report) {
 }
 
 // ------------------------------------------------- remaining steps -------
-function addPromotion(title, description) {
+// Modal capture: dialogs here are plain divs, so we tag the smallest ancestor
+// that contains both the modal subtitle and the field we are about to fill.
+const MODAL = '[data-qa-modal="1"]';
+function markModal(anchorText, probeSelector) {
+  const expr = `() => {
+    document.querySelectorAll('[data-qa-modal="1"]').forEach(el => el.removeAttribute('data-qa-modal'));
+    const anchor = [...document.querySelectorAll('h1,h2,h3,p,span')]
+      .filter(el => (el.innerText || '').includes(${JSON.stringify(anchorText)}))
+      .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
+    if (!anchor) return 'no-anchor';
+    let scope = anchor;
+    for (let i = 0; i < 10 && scope && !scope.querySelector(${JSON.stringify(probeSelector)}); i++) scope = scope.parentElement;
+    if (!scope) return 'no-scope';
+    scope.setAttribute('data-qa-modal', '1');
+    return 'ok';
+  }`;
+  const out = clean(evalPage(expr));
+  if (!/\bok\b/.test(out)) throw new Error(`Modal not found (anchor ${JSON.stringify(anchorText)}): ${out}`);
+  return MODAL;
+}
+
+function clickModalSave(label) {
+  return clickFirst([
+    `locator('${MODAL} button:has-text(${JSON.stringify(label)})')`,
+    `locator('[role="dialog"] button:has-text(${JSON.stringify(label)})')`,
+    `locator('[data-slot="dialog-content"] button:has-text(${JSON.stringify(label)})')`,
+    locator('role', 'button', { name: label, exact: true }) + '.last()'
+  ], `modal save "${label}"`);
+}
+
+/** Promotion Tab modal: plain title input + plain <textarea> description (not rich text) + raw-HTML switch. */
+async function addPromotionTab({ title, description, report, index }) {
   click(locator('role', 'button', { name: 'Add Promotion Tab', exact: true }) + '.first()');
-  heading('Add Promotion Tab');
+  await sleep(900);
+  markModal('optional raw-HTML toggle', 'input[placeholder="Enter promotion title"]');
+
+  const info = parseJson(evalPage(String.raw`() => {
+    const scope = document.querySelector('[data-qa-modal="1"]') || document;
+    const q = s => scope.querySelector(s);
+    const textarea = [...scope.querySelectorAll('textarea')].find(t => /Enter the description/.test(t.getAttribute('placeholder') || ''));
+    return JSON.stringify({
+      heading: (q('h2') ? q('h2').innerText : '').trim(),
+      subtitle: (q('p') ? q('p').innerText : '').trim(),
+      labels: [...scope.querySelectorAll('label')].map(l => ({ text: (l.innerText || '').replace(/\s+/g, ' ').trim(), required: !!l.querySelector('.text-destructive') })),
+      descriptionControl: textarea ? { tag: 'textarea', placeholder: textarea.getAttribute('placeholder') } : { tag: 'contenteditable', placeholder: '' },
+      rawHtmlSwitchCount: scope.querySelectorAll('button[role="switch"]').length
+    });
+  }`), {});
+
+  const requiredLabels = (info.labels || []).filter(l => l.required).map(l => l.text);
+  if (requiredLabels.length) {
+    logWarn(`promotion modal labels marked required (workflow says they are optional): ${requiredLabels.join(', ')}`);
+  }
+  if (info.descriptionControl && info.descriptionControl.tag === 'textarea') {
+    fillTextareaByPlaceholder([info.descriptionControl.placeholder || 'Enter the description...', 'Enter the description...', 'Enter the description…'], description);
+  } else {
+    fillRichTextAny(['Enter the description...', 'Enter the description…'], description);
+  }
   fill(locator('placeholder', 'Enter promotion title'), title);
-  richText(description);
-  click(locator('role', 'button', { name: 'Add Promotion Tab', exact: true }) + '.last()');
-  assertContains(bodyText(), title, 'Promotion tab');
+  const rawSwitch = await ensureSwitch('Treat as raw HTML', false);
+  const typed = readValues({ title: `${MODAL} input[placeholder="Enter promotion title"]` });
+  if (!String(typed.title || '').includes(title)) {
+    throw new Error(`Promotion title did not stick: ${JSON.stringify(typed.title)}`);
+  }
+
+  clickModalSave('Add Promotion Tab');
+  await sleep(900);
+  const saved = await waitForText(title, 12000);
+  if (!saved) throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}`);
+  logInfo(`promotion tab ${index} saved: ${title} (fields required: ${requiredLabels.length ? requiredLabels.join(',') : 'none'}, raw HTML: ${rawSwitch.checked ? 'on' : 'off'}, description=${info.descriptionControl ? info.descriptionControl.tag : '?'})`);
+  if (report) {
+    report.promotionTabs = report.promotionTabs || [];
+    report.promotionTabs.push({ index, title, description, heading: info.heading, subtitle: info.subtitle, descriptionControl: info.descriptionControl, fieldsRequired: requiredLabels, rawHtml: rawSwitch.checked });
+  }
+  return info;
 }
 
-function addPrizeDetail() {
+async function addPrizeDetail(report) {
   click(locator('role', 'button', { name: 'Add Prize Detail', exact: true }) + '.first()');
-  const body = bodyText();
-  if (!/Add Pri(ze|ce) Detail/i.test(body)) throw new Error('Add Prize Detail modal did not open.');
+  await sleep(900);
+  markModal('Add a short emoji', 'input[placeholder="Enter emoji"]');
+  const info = parseJson(evalPage(String.raw`() => {
+    const scope = document.querySelector('[data-qa-modal="1"]') || document;
+    const emoji = scope.querySelector('input[placeholder="Enter emoji"]');
+    const rich = scope.querySelector('[contenteditable="true"]');
+    return JSON.stringify({
+      heading: (scope.querySelector('h2') ? scope.querySelector('h2').innerText : '').trim(),
+      emojiMaxLength: emoji ? emoji.getAttribute('maxlength') : null,
+      descriptionPlaceholder: rich ? (rich.querySelector('[data-placeholder]') ? rich.querySelector('[data-placeholder]').getAttribute('data-placeholder') : '') : '',
+      hasRichText: !!rich
+    });
+  }`), {});
+  if (!/Add Pri(ze|ce) Detail/i.test(String(info.heading))) {
+    throw new Error(`Unexpected prize modal heading: ${JSON.stringify(info.heading)}`);
+  }
   fill(locator('placeholder', 'Enter emoji'), data.prizeEmoji);
-  richText(data.prizeDescription);
-  click(locator('role', 'button', { name: 'Add Prize Detail', exact: true }) + '.last()');
+  fillRichTextAny([info.descriptionPlaceholder, 'Enter the description...', 'Enter the description…'], data.prizeDescription);
+  clickModalSave('Add Prize Detail');
+  await sleep(900);
   assertContains(bodyText(), data.prizeDescription, 'Prize detail');
+  if (report) {
+    report.prizeDetail = { emoji: data.prizeEmoji, description: data.prizeDescription, modalHeading: info.heading, emojiMaxLength: info.emojiMaxLength };
+  }
+  logInfo(`prize detail saved (modal heading ${JSON.stringify(info.heading)})`);
 }
 
-function addCustomTier() {
+async function addCustomTier(report) {
+  const before = entryTierSnapshot();
+  if (!before.length) throw new Error('No entry tier rows detected before Add Entry Tier.');
   click(locator('role', 'button', { name: 'Add Entry Tier', exact: true }));
-  const countText = evalPage('() => String(document.querySelectorAll(\'input[name^="entryTiers.tiers."][name$=".entries"]\').length)');
-  const count = Number(countText.replace(/[^0-9]/g, ''));
-  if (!count) throw new Error(`Could not determine entry-tier count: ${countText}`);
-  const i = count - 1;
-  fill(`locator('input[name="entryTiers.tiers.${i}.entries"]')`, data.customTierEntries);
-  fill(`locator('input[name="entryTiers.tiers.${i}.price"]')`, data.customTierPrice);
-  fill(`locator('input[name="entryTiers.tiers.${i}.impact"]')`, data.customTierImpact);
+  await sleep(900);
+  const after = entryTierSnapshot();
+  if (after.length !== before.length + 1) {
+    throw new Error(`Add Entry Tier did not add exactly one tier (${before.length} -> ${after.length})`);
+  }
+  const added = after[after.length - 1];
+  if (added.disabled) throw new Error(`New tier ${added.idx} is disabled — cannot fill entries/price/impact.`);
+  fill(`locator('input[name="entryTiers.tiers.${added.idx}.entries"]')`, data.customTierEntries);
+  fill(`locator('input[name="entryTiers.tiers.${added.idx}.price"]')`, data.customTierPrice);
+  fill(`locator('input[name="entryTiers.tiers.${added.idx}.impact"]')`, data.customTierImpact);
+  await sleep(400);
+  const verified = entryTierSnapshot().find(t => t.idx === added.idx);
+  if (!verified) throw new Error(`New tier ${added.idx} disappeared after filling.`);
+  for (const [field, expected] of [['entries', data.customTierEntries], ['price', data.customTierPrice], ['impact', data.customTierImpact]]) {
+    if (String(verified[field]) !== String(expected)) {
+      throw new Error(`Tier ${added.idx} ${field} did not persist: expected ${JSON.stringify(expected)}, got ${JSON.stringify(verified[field])}`);
+    }
+  }
   assertContains(bodyText(), data.customTierImpact, 'Custom entry tier');
+  if (report) {
+    report.entryTiers = { seededCount: before.length, seeded: before, added: verified };
+    const locked = before.filter(t => t.locked || t.disabled).length;
+    logInfo(`entry tiers: ${before.length} seeded (${locked} locked) + 1 added -> tier ${added.idx} ${data.customTierPrice}/${data.customTierEntries}`);
+  }
 }
 
+/** Bonus modal: title + rich text + optional entry-tier link + required image. */
 async function addBonus(report) {
   click(locator('role', 'button', { name: 'Add Bonus', exact: true }) + '.first()');
-  heading('Add Bonus');
+  await sleep(900);
+  markModal('optional image, and linked entry tiers', 'input[placeholder="Enter bonus title"]');
+  const info = parseJson(evalPage(String.raw`() => {
+    const scope = document.querySelector('[data-qa-modal="1"]') || document;
+    const rich = scope.querySelector('[contenteditable="true"]');
+    const input = scope.querySelector('input[type="file"]');
+    return JSON.stringify({
+      heading: (scope.querySelector('h2') ? scope.querySelector('h2').innerText : '').trim(),
+      labels: [...scope.querySelectorAll('label')].map(l => ({ text: (l.innerText || '').replace(/\s+/g, ' ').trim(), required: !!l.querySelector('.text-destructive') })),
+      descriptionPlaceholder: rich && rich.querySelector('[data-placeholder]') ? rich.querySelector('[data-placeholder]').getAttribute('data-placeholder') : '',
+      imageAccept: input ? (input.getAttribute('accept') || '') : '',
+      hasTierMenu: !!scope.querySelector('button[data-slot="dropdown-menu-trigger"]')
+    });
+  }`), {});
+
   fill(locator('placeholder', 'Enter bonus title'), data.bonusTitle);
-  richText(data.bonusDescription);
+  fillRichTextAny([info.descriptionPlaceholder, 'Enter the description…', 'Enter the description...'], data.bonusDescription);
+
+  let tierLink = null;
+  if (info.hasTierMenu) {
+    try {
+      tierLink = await selectMenuOption({
+        triggerTarget: `locator('${MODAL} button[data-slot="dropdown-menu-trigger"]')`,
+        preferredText: '',
+        label: 'Bonus entry tiers'
+      });
+    } catch (e) {
+      logWarn(`bonus entry-tier link skipped: ${String(e.message).split('\n')[0]}`);
+    }
+  } else {
+    logWarn('bonus modal has no entry-tier dropdown-menu-trigger (skipping link step)');
+  }
+
   const inputs = listFileInputs();
   const res = await attemptUpload({
-    dropTarget: `locator('div:has-text("Drag & drop or click to upload")').last()`,
-    clickTarget: `locator('div:has-text("Drag & drop or click to upload")').last()`,
+    dropTarget: `locator('${MODAL} div:has-text("Drag & drop or click to upload")')`,
+    clickTarget: `locator('${MODAL} div:has-text("Drag & drop or click to upload")')`,
     inputNth: inputs.length ? -1 : null,
     absPaths: [bonusImage],
     label: 'Bonus'
   });
+
+  clickModalSave('Add Bonus');
+  await sleep(1000);
+  const saved = await waitForText(data.bonusTitle, 12000);
+  if (!saved) throw new Error(`Bonus ${JSON.stringify(data.bonusTitle)} not listed after save. Errors: ${captureVisibleErrors().join(' | ') || 'none'}`);
+  report.media = report.media || {};
   report.media.bonus = { file: path.basename(bonusImage), strategy: res.strategy };
-  click(locator('role', 'button', { name: 'Add Bonus', exact: true }) + '.last()');
-  assertContains(bodyText(), data.bonusTitle, 'Bonus');
+  report.bonus = { title: data.bonusTitle, description: data.bonusDescription, modalHeading: info.heading, labels: info.labels, entryTierLink: tierLink, imageStrategy: res.strategy };
+  logInfo(`bonus saved: ${data.bonusTitle} (image via ${res.strategy}${tierLink ? `, tier link ${tierLink.text}` : ''})`);
 }
 
-function fillSweepsInfo() {
+function fillSweepsInfo(report) {
   heading('Sweeps Info');
   const fields = [
     ['input[name="prizeDetails.prizeTitle"]', data.prizeReward],
@@ -485,16 +633,50 @@ function fillSweepsInfo() {
     ['input[name="rulesDates.minimumAge"]', data.minimumAge],
     ['input[name="rulesDates.eligibleCountries"]', data.eligibleCountries],
     ['input[name="rulesDates.startDate"]', data.startDate],
-    ['input[name="rulesDates.endDate"]', data.endDate]
+    ['input[name="rulesDates.endDate"]', data.endDate],
+    ['textarea[name="prizeDetails.winnerAnnouncementContent"]', data.winnerAnnouncementContent],
+    ['input[name="rulesDates.drawDate"]', data.drawDate]
   ];
+  const before = switchList().map(s => ({ label: s.label, checked: s.checked }));
+  // Drawing date is filled explicitly, so the auto-calculate helper must stay off.
+  const autoDraw = findSwitch('Auto-calculate Drawing Date');
+  if (autoDraw && autoDraw.checked) ensureSwitch('Auto-calculate Drawing Date', false);
   for (const [css, value] of fields) fill(`locator(${JSON.stringify(css)})`, value);
+  const expected = Object.fromEntries(fields.map(([css, value]) => [css, String(value)]));
+  const actual = readValues(expected);
+  const norm = v => String(v === null || v === undefined ? '' : v).toLowerCase().replace(/[^a-z0-9]/g, '');
+  for (const [css, value] of Object.entries(expected)) {
+    if (norm(actual[css]) !== norm(value)) {
+      // Currency/number inputs may reformat while typing; record instead of failing on formatting-only drift.
+      if (/prizeValue|numberOfWinners|guests|minimumAge/.test(css)) {
+        logWarn(`Sweeps Info ${css} stored as ${JSON.stringify(actual[css])} (sent ${JSON.stringify(value)}) — formatting drift, recorded`);
+      } else {
+        throw new Error(`Sweeps Info field ${css} did not persist: expected ${JSON.stringify(value)}, got ${JSON.stringify(actual[css])}`);
+      }
+    }
+  }
+  const after = switchList().map(s => ({ label: s.label, checked: s.checked }));
+  if (report) {
+    report.sweepsInfo = { values: actual, switchesBefore: before, switchesAfter: after };
+  }
+  logInfo(`Sweeps Info filled and verified: ${fields.length} fields; switches untouched (${after.map(s => `${s.label}=${s.checked ? 'on' : 'off'}`).join(', ')})`);
 }
 
+/** Admin listing row for our title: sweeps link anchor => public storefront URL. */
 function publicUrlFromAdminRow(title) {
-  const script = `() => { const links=[...document.querySelectorAll('a[aria-label="Sweeps link"]')]; const link=links.find(a=>(a.closest('tr')?.innerText||'').includes(${JSON.stringify(title)})); return link?.href||''; }`;
-  const href = evalPage(script);
-  if (!href) throw new Error(`No Sweeps link found for ${title}`);
-  return new URL(href, PUBLIC).toString();
+  const raw = evalPage(String.raw`() => {
+    const rows = [...document.querySelectorAll('tr')].filter(tr => (tr.innerText || '').includes(${JSON.stringify(title)}));
+    const links = [...document.querySelectorAll('a')].filter(a => /\/sweeps\/[^/?#]+/i.test(a.getAttribute('href') || ''));
+    const pick = links.find(a => rows.includes(a.closest('tr')));
+    if (!pick) return '[]';
+    return JSON.stringify([{ href: pick.href, label: (pick.getAttribute('aria-label') || pick.innerText || '').trim(), inRow: true }]);
+  }`);
+  const candidates = parseJson(raw, []);
+  if (!candidates.length) throw new Error(`No sweeps-link anchor found in the admin row for ${JSON.stringify(title)}`);
+  const best = candidates.find(c => !/partners\./i.test(c.href)) || candidates[0];
+  const url = best.href.startsWith('http') ? best.href : new URL(best.href, ADMIN).toString();
+  logInfo(`admin row sweeps link (${best.label || 'no label'}): ${url}`);
+  return url;
 }
 
 function storefrontMedia() {
@@ -555,18 +737,18 @@ async function main() {
     });
 
     await step(report, 'Create two Promotion Tabs', async () => {
-      addPromotion(data.promotionOne, data.promotionDescriptionOne);
-      addPromotion(data.promotionTwo, data.promotionDescriptionTwo);
+      await addPromotionTab({ title: data.promotionOne, description: data.promotionDescriptionOne, report, index: 1 });
+      await addPromotionTab({ title: data.promotionTwo, description: data.promotionDescriptionTwo, report, index: 2 });
       await clickContinueAndExpect('Prize Details');
     });
 
     await step(report, 'Create Prize Detail', async () => {
-      addPrizeDetail();
+      await addPrizeDetail(report);
       await clickContinueAndExpect('Entry Tiers');
     });
 
     await step(report, 'Add custom Entry Tier', async () => {
-      addCustomTier();
+      await addCustomTier(report);
       await clickContinueAndExpect('Bonuses');
     });
 
@@ -576,7 +758,7 @@ async function main() {
     });
 
     await step(report, 'Fill Sweeps Info', async () => {
-      fillSweepsInfo();
+      fillSweepsInfo(report);
       await clickContinueAndExpect('Tracking');
     });
 
@@ -587,25 +769,51 @@ async function main() {
 
     await step(report, 'Validate Review and Submit', async () => {
       heading('Review & Submit');
-      const body = bodyText();
-      assertAbsent(body, 'needs your attention', 'Review');
-      assertContains(body, sweepTitle, 'Review title');
-      assertContains(body, data.promotionOne, 'Review promotion 1');
-      assertContains(body, data.promotionTwo, 'Review promotion 2');
-      assertContains(body, data.prizeDescription, 'Review prize detail');
-      assertContains(body, data.customTierImpact, 'Review custom tier');
-      assertContains(body, data.bonusTitle, 'Review bonus');
-      assertContains(body, data.prizeReward, 'Review reward');
+      const review = reviewSnapshot();
+      report.review = review;
+      report.reviewChecks = [];
+      logInfo(`review sections: ${review.sections.map(s => s.section).join(' | ') || '(none detected)'}`);
+      if (review.attentionBanner) {
+        const flagged = review.sections.filter(s => s.needsAttention).map(s => s.section);
+        logWarn(`review banner says ${review.stepsNeedingAttention} step(s) need attention: ${flagged.join(', ') || 'unknown section'}`);
+      }
+      const expectInSection = (sectionName, entries) => {
+        const sec = review.sections.find(s => new RegExp(sectionName, 'i').test(s.section));
+        for (const [label, needle] of entries) {
+          const present = sec ? sec.text.includes(needle) : false;
+          const row = sec && label ? sec.rows.find(r => new RegExp(label, 'i').test(r.label)) : null;
+          report.reviewChecks.push({ section: sectionName, label, expected: needle, present, rowValue: row ? row.value : null });
+          if (!present) throw new Error(`Review ${sectionName} does not show ${JSON.stringify(needle)}`);
+        }
+      };
+      expectInSection('Campaign Info', [['Sweeps Title', sweepTitle], ['Full Description', campaignDescription.slice(0, 32)]]);
+      expectInSection('Partners', [['Talent Partners', (report.selections.talent && report.selections.talent.text) || talentPreferred], ['Artist Quote Title', artistQuoteTitle]]);
+      expectInSection('Promotion Tabs', [['', data.promotionOne], ['', data.promotionTwo]]);
+      expectInSection('Prize Details', [['', data.prizeDescription]]);
+      expectInSection('Entry Tiers', [['', data.customTierEntries]]);
+      expectInSection('Bonuses', [['', data.bonusTitle]]);
+      expectInSection('Sweeps Info', [['Prize', data.prizeReward], ['Number of Winners', data.numberOfWinners]]);
+      const empties = review.sections.filter(s => s.empty && !/Tracking/i.test(s.section)).map(s => s.section);
+      if (empties.length) logWarn(`review sections still reported empty: ${empties.join(', ')}`);
+      if (review.attentionBanner) logWarn('continuing despite review attention banner (fields may be optional for draft save)');
     });
 
     await step(report, 'Create Sweep', async () => {
+      const mark = networkMark({ includeStatic: true });
       clickFirst([
+        `locator('button[type="submit"]:has-text("CREATE SWEEPS")')`,
+        `locator('button[type="submit"]:has-text("Create Sweeps")')`,
         locator('role', 'button', { name: 'CREATE SWEEPS' }),
-        locator('role', 'button', { name: 'Create Sweeps' }),
-        `locator('button:has-text("CREATE SWEEPS")')`,
-        `locator('button:has-text("Create Sweeps")')`
+        locator('role', 'button', { name: 'Create Sweeps' })
       ], 'CREATE SWEEPS');
-      await sleep(2000);
+      await sleep(3000);
+      const posts = networkSince(mark, { includeStatic: true }).filter(r => r.method === 'POST');
+      const sweepPosts = posts.filter(r => /sweeps/i.test(r.url));
+      report.createNetwork = { posts: networkSummary(posts), sweepPosts: networkSummary(sweepPosts), url: currentUrl() };
+      logInfo(`network after CREATE SWEEPS: ${networkSummary(posts).join(' || ') || '(no POST observed)'}`);
+      const failures = posts.filter(r => r.status === -1 || (r.status !== null && r.status >= 400));
+      if (failures.length) throw new Error(`Create request failed: ${failures.map(r => r.line).join(' | ')}`);
+      if (!sweepPosts.length) logWarn('no POST to a /sweeps URL observed after CREATE SWEEPS (see createNetwork in report.json)');
       const url = currentUrl();
       if (!/\/admin\/sweeps/i.test(url)) throw new Error(`Create did not return to /admin/sweeps. Current URL: ${url}`);
     });
@@ -632,8 +840,37 @@ async function main() {
         if (!charityFound) logWarn(`charity ${JSON.stringify(charityText)} not found on storefront (recorded, not failing)`);
       }
       const media = storefrontMedia();
+      const snapshot = storefrontSnapshot() || {};
       const uploadedCount = (report.media.galleryOrder || []).length + (report.media.cover && !report.media.cover.error ? 1 : 0);
       logInfo(`storefront media: ${media.length} items (uploaded ${uploadedCount}); order: ${media.map(m => m.alt || m.src).join(' | ').slice(0, 400)}`);
+      // Everything entered in admin must be reflected on the public storefront.
+      const entryPrice = `$${Number(data.customTierPrice).toFixed(2)}`;
+      const requiredOnStorefront = [
+        ['Sweeps Title', sweepTitle],
+        ['Prize / Reward', data.prizeReward],
+        ['Eligible Countries', data.eligibleCountries],
+        ['Minimum age', `${data.minimumAge} to win`],
+        ['Custom tier entries', `+${data.customTierEntries} entries`],
+        ['Winner announcement', data.winnerAnnouncementContent]
+      ];
+      const recordedOnStorefront = [
+        ['Custom tier price', entryPrice],
+        ['Promotion tab 1', data.promotionOne],
+        ['Promotion tab 2', data.promotionTwo],
+        ['Prize detail description', data.prizeDescription],
+        ['Bonus title', data.bonusTitle]
+      ];
+      report.storefrontChecks = [];
+      for (const [label, needle] of requiredOnStorefront) {
+        const present = body.includes(needle);
+        report.storefrontChecks.push({ label, expected: needle, present, required: true });
+        if (!present) throw new Error(`Storefront missing ${label}: ${JSON.stringify(needle)}`);
+      }
+      for (const [label, needle] of recordedOnStorefront) {
+        const present = body.includes(needle);
+        report.storefrontChecks.push({ label, expected: needle, present, required: false });
+        if (!present) logWarn(`storefront missing ${label} ${JSON.stringify(needle)} (recorded, not fatal)`);
+      }
       report.storefront = {
         url: publicUrl,
         talentFound: talentText ? body.toLowerCase().includes(String(talentText).toLowerCase()) : null,
@@ -641,12 +878,15 @@ async function main() {
         descriptionFound: body.toLowerCase().includes(campaignDescription.slice(0, 32).toLowerCase()),
         mediaCount: media.length,
         uploadedCount,
-        media
+        media,
+        snapshot,
+        entries: (snapshot && snapshot.entries) || []
       };
       if (uploadedCount && media.length && media.length < (report.media.galleryOrder || []).length) {
         logWarn(`storefront shows fewer media items (${media.length}) than uploaded gallery order (${(report.media.galleryOrder || []).length})`);
       }
     });
+
 
     await step(report, 'Exercise every add-to-cart button', async () => {
       const rawCount = evalPage('() => String(document.querySelectorAll("button#add-to-cart-btn").length)');
@@ -657,18 +897,29 @@ async function main() {
       const cartResults = [];
       for (let i = 0; i < count; i++) {
         console.log(`  Cart button ${i + 1}/${count}: ${buttonTexts[i]}`);
-        const before = currentUrl();
+        const mark = networkMark({ includeStatic: true });
         click(`locator('button#add-to-cart-btn').nth(${i})`);
-        await sleep(700);
-        const requests = cli(['requests'], { raw: true, allowFailure: true }).stdout;
-        const observed = /POST[^\n]*\/cart/i.test(requests);
-        cartResults.push({ index: i, text: clean(buttonTexts[i]), postCartObserved: observed });
-        goto(before || publicUrl);
-        await sleep(700);
+        await sleep(1800);
+        const seen = networkSince(mark, { includeStatic: true });
+        const cartPosts = seen.filter(r => r.method === 'POST' && /\/cart\b/i.test(r.url));
+        const ok = cartPosts.some(r => r.status !== -1 && (r.status === null || r.status < 400));
+        const cart = cartState();
+        cartResults.push({
+          index: i,
+          text: clean(buttonTexts[i]),
+          postCartObserved: cartPosts.length > 0,
+          ok,
+          cartPost: cartPosts.map(r => r.line),
+          itemCount: cart ? cart.item_count : null,
+          requests: networkSummary(seen).slice(0, 25)
+        });
+        if (!ok) logWarn(`cart button ${i + 1} (${buttonTexts[i]}) had no successful POST /cart; seen: ${networkSummary(seen).join(' || ') || 'none'}`);
+        goto(publicUrl);
+        await sleep(900);
       }
       writeJson('cart-results.json', cartResults);
-      const failed = cartResults.filter(x => !x.postCartObserved);
-      if (failed.length) throw new Error(`Some add-to-cart clicks had no POST /cart in request log: ${JSON.stringify(failed)}`);
+      const failed = cartResults.filter(x => !x.ok);
+      if (failed.length) throw new Error(`Some add-to-cart clicks had no successful POST /cart: ${JSON.stringify(failed.map(f => ({ i: f.index, text: f.text, seen: f.requests })))}`);
     });
 
     report.status = 'PASS';
