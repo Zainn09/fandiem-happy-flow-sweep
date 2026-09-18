@@ -1,46 +1,38 @@
-<<<<<<< HEAD
 # fandiem-happy-flow-sweep
-=======
-# Fandiem – Existing Chrome Profile Automation
 
-This version matches the requested architecture:
+Browser-only Fandiem sweep happy-flow automation against the user's **existing logged-in Chrome profile** via the Playwright extension (no second profile, no remote-debug port, browser stays open).
 
-- Uses the existing Chrome browser.
-- Targets the existing `bigfolio.co` Chrome profile.
-- Reuses that profile's current login, cookies and tabs.
-- Uses the Playwright browser extension rather than remote debugging port 9222.
-- Does not use a Shopify Admin API key.
-- Does not launch a second Chrome profile.
-- Does not close Chrome when the test finishes.
+## Architecture
 
-The supplied Fandiem PDF documents the Partners fields, Promotion modal, Prize Detail modal, Entry Tiers, Bonus modal/image upload, Sweeps Info, unchanged Tracking & Visibility, Review & Submit, CREATE SWEEPS, admin sweep listing and public `#add-to-cart-btn` verification. The test follows that order. The PDF's initial Campaign Info DOM is not included, so the runner detects it and clicks CONTINUE when present instead of inventing selectors for that missing screen.
+- Uses the existing Chrome browser + `bigfolio.co` profile login/cookies/tabs.
+- Attaches via Playwright browser extension (`npm run attach`), never `--user-data-dir`.
+- `detach` on finish — Chrome windows/tabs stay open.
+- Follows the Screen-1 workflow: Admin → Campaigns → Sweeps → `/admin/sweeps/create` → Campaign Info (title + cover + gallery + description + CONTINUE) → Partners (2 comboboxes + quote + subtitle) → Promotion Tabs → Prize Details → Entry Tiers → Bonuses → Sweeps Info → Tracking & Visibility (unchanged) → Review & Submit → CREATE SWEEPS → admin listing → storefront verification incl. media order + `#add-to-cart-btn` clicks.
 
 ## 1. Prerequisite
 
-Use Chrome with the `bigfolio.co` profile selected.
+Use Chrome with the `bigfolio.co` profile selected. Install + enable the Playwright browser extension / MCP Bridge **in that profile**.
 
-Install the Playwright browser extension / MCP Bridge in that specific Chrome profile. Playwright's extension connection is designed to attach to existing tabs and reuse existing logged-in sessions/cookies. It also supports selecting a specific profile with `--profile-dir-name`. See the official docs:
+Docs:
 
 - https://playwright.dev/mcp/configuration/browser-extension
 - https://playwright.dev/agent-cli/commands/attach
 
-## 2. Install dependencies in VS Code
-
-Open the project folder and run:
+## 2. Install
 
 ```powershell
 npm install
 ```
 
-Node.js 20+ is recommended for the current Playwright CLI documentation.
+Node.js 20+ recommended.
 
-## 3. Verify the Chrome profile
+## 3. Verify profile
 
 ```powershell
 npm run profile
 ```
 
-Expected output is similar to:
+Expected:
 
 ```text
 Chrome User Data: C:\Users\YOURUSER\AppData\Local\Google\Chrome\User Data
@@ -48,57 +40,65 @@ Profile display name: bigfolio.co
 Profile directory: Profile 2
 ```
 
-Do not copy that example `Profile 2`. The script detects the actual directory from Chrome's Local State file.
+Don't copy `Profile 2` — the script detects the real directory from Chrome's Local State.
 
-## 4. Attach to your existing Chrome
+## 4. Attach
 
 ```powershell
 npm run attach
 ```
 
-When you run this command:
-1. Chrome will open a tab titled **Welcome** (`chrome-extension://.../connect.html`).
-2. On that tab, click the **"Allow & select"** button next to any tab to approve Playwright automation.
-3. Once approved, the terminal will report `PLAYWRIGHT ATTACHED` and you can run your tests!
+1. A **Welcome** tab (`chrome-extension://.../connect.html`) opens.
+2. Click **Allow & select** next to any tab.
+3. Terminal reports `PLAYWRIGHT ATTACHED`.
 
-> **Tip (Zero-Click Auto-Attach):** On that same extension page or by visiting `chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/status.html`, copy the token shown under *"Set this environment variable to bypass the connection dialog"* and paste it into `config.json` as `"extensionToken": "YOUR_TOKEN"`. Future runs will attach immediately without prompting!
+> Zero-click: on that page or `chrome-extension://mmlmfjhmonkocbjadbfplnigmagldckm/status.html`, copy the token under *"Set this environment variable to bypass the connection dialog"* into `config.json` → `extensionToken`.
 
-## 5. Run the Fandiem happy flow
+## 5. Run happy flow
 
 ```powershell
-$env:SWEEP_TITLE="QA-AUTO-FANDIEM-001"
 npm test
 ```
 
-The test creates real sweep data, so run it only against the intended test/staging environment. The test data and bonus image are unique/reusable test fixtures.
+What it does (Screen 1 detail):
 
-## 6. Change charity if needed
+- Opens new tab to `https://partners.fandiem.co/admin`, clicks `Campaigns` → `Sweeps` → `a[href="/admin/sweeps/create"]`.
+- Title: `input[name="campaignInfo.title"]` → `QA-AUTO-FANDIEM-YYYYMMDD-NNN` (date + per-day run counter, required).
+- Cover: `div.space-y-1` + `input[accept="image/png,image/jpeg,image/jpg,image/webp,video/mp4,video/quicktime,video/webm"]` — tries `drop` → `setInputFiles` via `run-code` → `click+upload`; records file order + errors. Optional.
+- Gallery: `button[type="button"]` containing `Add media` — uploads multiple files, records order for storefront comparison. Required (at least 1).
+- Description: `[data-placeholder="Describe the experience in detail..."]` rich-text — happy-flow text, verified on storefront.
+- CONTINUE: `button[data-slot="button"][data-variant="gradient"][data-size="lg"]` with `CONTINUE` — captures errors on click.
+- Partners: first `button[type="button"][role="combobox"]` (talent, required) + `input[name="promoContent.artistQuoteTitle"]` + `textarea[name="promoContent.artistQuote"]` + second combobox (charity) + `input[name="charitySetup.charitySubtitle"]`. Both combobox selections + innerHTML remembered for storefront check.
 
-The supplied PDF does not include the actual charity picker options, so the test does not invent a charity name. By default it selects the first selectable option exposed by the live picker.
-
-To force a specific charity:
+Override title / partners if needed:
 
 ```powershell
+$env:SWEEP_TITLE="QA-AUTO-FANDIEM-001"
+$env:TALENT_PARTNER_NAME="Exact Talent Name"
 $env:CHARITY_PARTNER_NAME="Exact Charity Name"
 npm test
 ```
 
-## 7. Chrome remains open
+Creates real sweep data — run only against intended test env.
 
-The runner calls `detach` when the test finishes. Attached sessions are detached without closing the external browser. Your Chrome windows/tabs remain open.
+## 6. Media fixtures
 
-## 8. Results
+`assets/` holds small upload fixtures. Add your own images/videos there and list them in `config.json` (`coverMedia`, `galleryMedia`) to exercise PNG/JPEG/JPG/WebP/MP4/MOV/WebM order + error cases.
+
+## 7. Results
 
 ```text
 results/
-├── report.json
+├── report.json          # steps, title, selections, media order, storefront URL
 ├── cart-results.json
-└── *.png
+├── run-counter-*.json   # per-day run counter for title NNN
+└── *.png                # per-step screenshots + FAILED captures
 ```
 
-Screenshots are captured after each major step and on failures.
+## 8. Chrome stays open
 
-## 9. Important security note
+Runner calls `detach` on PASS (stays attached on FAIL for debugging). Never closes your browser.
 
-Your existing Chrome profile contains authenticated session data. The Playwright documentation warns that browser-attachment/automation can access the state available in that browser profile. Use the extension only in a trusted local environment and do not share the generated session data.
->>>>>>> big-dev-nightmare
+## 9. Security
+
+Your Chrome profile holds authenticated sessions. Playwright attachment can access that state — use only in a trusted local env, don't share session data.
