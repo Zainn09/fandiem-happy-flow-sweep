@@ -1,0 +1,15 @@
+{
+  "name": "fandiem-existing-chrome-automation",
+  "version": "3.0.0",
+  "private": true,
+  "description": "Browser-only Fandiem sweep happy-flow automation against the user's existing Chrome profile via Playwright Extension.",
+  "scripts": {
+    "profile": "node scripts/profile.js",
+    "attach": "node scripts/attach.js",
+    "test": "node scripts/run.js",
+    "detach": "node scripts/detach.js"
+  },
+  "devDependencies": {
+    "@playwright/cli": "latest"
+  }
+}

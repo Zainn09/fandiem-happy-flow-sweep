@@ -1,0 +1,41 @@
+{
+  "startedAt": "2026-09-18T17:56:04.764Z",
+  "sweepTitle": "QA-AUTO-FANDIEM-20260918175604",
+  "status": "FAIL",
+  "steps": [
+    {
+      "name": "Open Partners screen",
+      "status": "PASS",
+      "durationMs": 11522
+    },
+    {
+      "name": "Complete Partners",
+      "status": "FAIL",
+      "durationMs": 1585,
+      "error": "Talent partner: expected to find \"5B ARTISTS\""
+    }
+  ],
+  "testData": {
+    "promotionOne": "QA Promotion One 20260918175604",
+    "promotionTwo": "QA Promotion Two 20260918175604",
+    "promotionDescriptionOne": "Automated happy-flow promotion one 20260918175604",
+    "promotionDescriptionTwo": "Automated happy-flow promotion two 20260918175604",
+    "prizeEmoji": "🎁",
+    "prizeDescription": "Automated prize detail 20260918175604",
+    "customTierEntries": "500",
+    "customTierPrice": "75",
+    "customTierImpact": "Automated tier impact 20260918175604",
+    "bonusTitle": "QA Bonus 20260918175604",
+    "bonusDescription": "Automated bonus 20260918175604",
+    "prizeReward": "QA Reward 20260918175604",
+    "numberOfWinners": "1",
+    "numberOfGuests": "2",
+    "prizeValue": "1000",
+    "minimumAge": "18",
+    "eligibleCountries": "US",
+    "startDate": "2026-09-19T12:00",
+    "endDate": "2026-09-26T12:00"
+  },
+  "finishedAt": "2026-09-18T17:56:18.337Z",
+  "error": "Talent partner: expected to find \"5B ARTISTS\""
+}

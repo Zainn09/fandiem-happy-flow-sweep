@@ -1,0 +1,20 @@
+{
+  "chromeProfileDisplayName": "bigfolio.co",
+  "chromeProfileDirName": "",
+  "sessionName": "fandiem-existing-chrome",
+  "extensionToken": "",
+  "chromeExecutablePath": "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+  "autoOpenProfileIfNeeded": true,
+  "adminBaseUrl": "https://partners.fandiem.co",
+  "publicBaseUrl": "https://fandiem.co",
+  "expectedTalentPartner": "5B ARTISTS",
+  "sweepTitlePrefix": "QA-AUTO-FANDIEM",
+  "allowMutations": true,
+  "charityPartnerName": "",
+  "bonusImage": "./assets/qa-bonus.png",
+  "timeouts": {
+    "actionMs": 30000,
+    "navigationMs": 60000,
+    "flowMs": 45000
+  }
+}
