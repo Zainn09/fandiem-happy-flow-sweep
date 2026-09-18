@@ -188,13 +188,26 @@ function itemsNumber() {
  * Upload files with 3 strategies and polling verify.
  * inputNth: which global input[type=file] to target for setInputFiles (-1 = last, null = skip).
  */
-async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, label }) {
+async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, label, verify }) {
   const names = absPaths.map(p => path.basename(p)).join(',');
   const beforeTiles = galleryTileCount();
   const beforeItems = itemsNumber();
   const errors = [];
 
-  async function verify(tag) {
+  async function confirm(tag) {
+    if (typeof verify === 'function') {
+      const end = Date.now() + 12000;
+      while (Date.now() < end) {
+        try {
+          if (await verify()) {
+            logInfo(`${label}: ${tag} ok (custom verify) files=${names}`);
+            return { custom: true, files: absPaths.slice() };
+          }
+        } catch (_) { /* keep polling */ }
+        await sleep(config.timeouts.pollMs || 500);
+      }
+      return null;
+    }
     const grew = await pollMediaIncrease(beforeTiles, beforeItems, 12000);
     if (grew) {
       logInfo(`${label}: ${tag} ok (tiles ${beforeTiles}->${grew.tiles}, ${grew.itemsText || 'items n/a'}) files=${names}`);
@@ -207,8 +220,8 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
   try {
     logInfo(`${label}: strategy=drop target=${dropTarget} files=${names}`);
     dropFiles(dropTarget, absPaths);
-    const grew = await verify('drop');
-    if (grew) return { strategy: 'drop', files: absPaths.slice(), ...grew };
+    const grew = await confirm('drop');
+    if (grew) return { strategy: 'drop', ...grew };
     errors.push('drop: no new media detected');
   } catch (e) { errors.push(`drop: ${String(e.message).split('\n')[0]}`); }
 
@@ -220,8 +233,8 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
       logInfo(`${label}: strategy=setInputFiles nth=${idx} (inputs=${inputs.length}) files=${names}`);
       if (idx < 0) throw new Error(`no file inputs on page (found ${inputs.length})`);
       runCode(`async page => { await page.locator('input[type="file"]').nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`);
-      const grew = await verify(`setInputFiles[${idx}]`);
-      if (grew) return { strategy: `setInputFiles[${idx}]`, files: absPaths.slice(), ...grew };
+      const grew = await confirm(`setInputFiles[${idx}]`);
+      if (grew) return { strategy: `setInputFiles[${idx}]`, ...grew };
       errors.push(`setInputFiles[${idx}]: no new media detected`);
     } catch (e) { errors.push(`setInputFiles: ${String(e.message).split('\n')[0]}`); }
   }
@@ -232,8 +245,8 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
     cli(['click', clickTarget]);
     await sleep(900);
     uploadFiles(absPaths);
-    const grew = await verify('click+upload');
-    if (grew) return { strategy: 'click+upload', files: absPaths.slice(), ...grew };
+    const grew = await confirm('click+upload');
+    if (grew) return { strategy: 'click+upload', ...grew };
     errors.push('click+upload: no new media detected');
   } catch (e) { errors.push(`click+upload: ${String(e.message).split('\n')[0]}`); }
 
@@ -440,24 +453,32 @@ async function fillPartners(report) {
 }
 
 // ------------------------------------------------- remaining steps -------
-// Modal capture: dialogs here are plain divs, so we tag the smallest ancestor
-// that contains both the modal subtitle and the field we are about to fill.
+// Dialogs here are plain divs (no role="dialog"), so tag the smallest ancestor
+// that holds both the field we are about to fill and the modal's submit button.
 const MODAL = '[data-qa-modal="1"]';
-function markModal(anchorText, probeSelector) {
+function markModal(anchorText, probeSelector, saveLabel) {
   const expr = `() => {
+    const probe = document.querySelector(${JSON.stringify(probeSelector)});
+    if (!probe) return 'no-probe';
     document.querySelectorAll('[data-qa-modal="1"]').forEach(el => el.removeAttribute('data-qa-modal'));
-    const anchor = [...document.querySelectorAll('h1,h2,h3,p,span')]
-      .filter(el => (el.innerText || '').includes(${JSON.stringify(anchorText)}))
-      .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length)[0];
-    if (!anchor) return 'no-anchor';
-    let scope = anchor;
-    for (let i = 0; i < 10 && scope && !scope.querySelector(${JSON.stringify(probeSelector)}); i++) scope = scope.parentElement;
+    const label = ${JSON.stringify(saveLabel)};
+    const hasSave = el => !!el && [...el.querySelectorAll('button')].some(b => (b.innerText || '').replace(/\\s+/g, ' ').includes(label));
+    const anchors = [...document.querySelectorAll('h1,h2,h3,p,span')]
+      .filter(el => (el.innerText || '').includes(${JSON.stringify(anchorText)}) && el.contains(probe))
+      .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+    let scope = null;
+    for (let node = anchors[0]; node && !scope; node = node.parentElement) {
+      if (hasSave(node)) scope = node;
+    }
+    for (let node = probe.closest('form') || probe.parentElement; node && !scope; node = node.parentElement) {
+      if (hasSave(node)) scope = node;
+    }
     if (!scope) return 'no-scope';
     scope.setAttribute('data-qa-modal', '1');
     return 'ok';
   }`;
   const out = clean(evalPage(expr));
-  if (!/\bok\b/.test(out)) throw new Error(`Modal not found (anchor ${JSON.stringify(anchorText)}): ${out}`);
+  if (!/\bok\b/.test(out)) throw new Error(`Modal not found (anchor ${JSON.stringify(anchorText)}, save ${JSON.stringify(saveLabel)}): ${out}`);
   return MODAL;
 }
 
@@ -474,7 +495,7 @@ function clickModalSave(label) {
 async function addPromotionTab({ title, description, report, index }) {
   click(locator('role', 'button', { name: 'Add Promotion Tab', exact: true }) + '.first()');
   await sleep(900);
-  markModal('optional raw-HTML toggle', 'input[placeholder="Enter promotion title"]');
+  markModal('raw-HTML', 'input[placeholder="Enter promotion title"]', 'Add Promotion Tab');
 
   const info = parseJson(evalPage(String.raw`() => {
     const scope = document.querySelector('[data-qa-modal="1"]') || document;
@@ -520,7 +541,7 @@ async function addPromotionTab({ title, description, report, index }) {
 async function addPrizeDetail(report) {
   click(locator('role', 'button', { name: 'Add Prize Detail', exact: true }) + '.first()');
   await sleep(900);
-  markModal('Add a short emoji', 'input[placeholder="Enter emoji"]');
+  markModal('short emoji', 'input[placeholder="Enter emoji"]', 'Add Prize Detail');
   const info = parseJson(evalPage(String.raw`() => {
     const scope = document.querySelector('[data-qa-modal="1"]') || document;
     const emoji = scope.querySelector('input[placeholder="Enter emoji"]');
@@ -580,7 +601,7 @@ async function addCustomTier(report) {
 async function addBonus(report) {
   click(locator('role', 'button', { name: 'Add Bonus', exact: true }) + '.first()');
   await sleep(900);
-  markModal('optional image, and linked entry tiers', 'input[placeholder="Enter bonus title"]');
+  markModal('linked entry tiers', 'input[placeholder="Enter bonus title"]', 'Add Bonus');
   const info = parseJson(evalPage(String.raw`() => {
     const scope = document.querySelector('[data-qa-modal="1"]') || document;
     const rich = scope.querySelector('[contenteditable="true"]');
@@ -613,12 +634,20 @@ async function addBonus(report) {
   }
 
   const inputs = listFileInputs();
+  const bonusUploadProbe = () => {
+    const res = parseJson(evalPage(`() => JSON.stringify({
+      files: [...document.querySelectorAll('${MODAL} input[type="file"]')].reduce((n, i) => n + (i.files ? i.files.length : 0), 0),
+      images: [...document.querySelectorAll('${MODAL} img')].filter(i => /blob:|cloudinary|amazonaws|fandiem/i.test(i.getAttribute('src') || '')).length
+    })`), {});
+    return (res.files || 0) > 0 || (res.images || 0) > 0;
+  };
   const res = await attemptUpload({
     dropTarget: `locator('${MODAL} div:has-text("Drag & drop or click to upload")')`,
     clickTarget: `locator('${MODAL} div:has-text("Drag & drop or click to upload")')`,
     inputNth: inputs.length ? -1 : null,
     absPaths: [bonusImage],
-    label: 'Bonus'
+    label: 'Bonus',
+    verify: bonusUploadProbe
   });
 
   clickModalSave('Add Bonus');
