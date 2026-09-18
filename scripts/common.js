@@ -258,6 +258,330 @@ async function waitForText(text, timeoutMs = 30000, pollMs = 500) {
   return false;
 }
 
+// ---------------------------------------------------------------- network --
+// `playwright-cli requests` renders one line per request: `12. [POST] https://host/path => [200] OK`
+function parseRequestLines(text) {
+  const out = [];
+  for (const line of String(text || '').split('\n')) {
+    const m = line.match(/^\s*(\d+)\.\s+\[([A-Z]+)\]\s+(\S+?)(?:\s+=>\s+\[(\d+|FAILED)\]\s*(.*?))?\s*$/);
+    if (!m) continue;
+    out.push({
+      index: Number(m[1]),
+      method: m[2],
+      url: m[3],
+      status: m[4] === 'FAILED' ? -1 : (m[4] ? Number(m[4]) : null),
+      statusText: clean(m[5] || ''),
+      line: line.trim()
+    });
+  }
+  return out;
+}
+
+function networkList({ filter, includeStatic = false } = {}) {
+  const args = ['requests'];
+  if (includeStatic) args.push('--static');
+  if (filter) args.push(`--filter=${filter}`);
+  const res = cli(args, { raw: true, allowFailure: true });
+  return parseRequestLines(res.stdout);
+}
+
+function networkMark(options) {
+  const list = networkList(options);
+  return list.length ? Math.max(...list.map(r => r.index)) : 0;
+}
+
+function networkSince(mark, options = {}) {
+  return networkList(options).filter(r => r.index > mark);
+}
+
+function requestDetails(index) {
+  const res = cli(['request', String(index)], { raw: true, allowFailure: true });
+  return String(res.stdout || '').trim();
+}
+
+function networkSummary(entries) {
+  return entries.map(e => `${e.index}. [${e.method}] ${e.url.slice(0, 180)} => ${e.status === -1 ? 'FAILED' : (e.status === null ? 'no-response' : e.status)} ${e.statusText}`.trim());
+}
+
+// ------------------------------------------------------------- page state --
+function parseJson(raw, fallback) {
+  const text = String(raw === undefined || raw === null ? '' : raw).trim();
+  if (!text) return fallback;
+  try {
+    const value = JSON.parse(text);
+    return value === null || value === undefined ? fallback : value;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function readValues(map) {
+  const expr = `() => JSON.stringify(Object.fromEntries(Object.entries(${JSON.stringify(map)}).map(([k, sel]) => { const el = document.querySelector(sel); return [k, el ? (el.value !== undefined && el.value !== null ? el.value : (el.innerText || '')) : null]; })))`;
+  return parseJson(evalPage(expr), {});
+}
+
+// Switches: button[role="switch"] with its label text living in an ancestor block.
+function switchList() {
+  const expr = String.raw`() => JSON.stringify([...document.querySelectorAll('button[role="switch"]')].map((el, i) => {
+    const parents = [];
+    let node = el.parentElement;
+    for (let depth = 0; depth < 5 && node; depth++) {
+      parents.push((node.innerText || '').replace(/\s+/g, ' ').trim());
+      node = node.parentElement;
+    }
+    return {
+      i,
+      checked: el.getAttribute('aria-checked') === 'true',
+      label: ((el.parentElement && el.parentElement.innerText) || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || '',
+      parents: parents.filter(Boolean)
+    };
+  }))`;
+  return parseJson(evalPage(expr), []);
+}
+
+function findSwitch(label) {
+  const want = String(label).toLowerCase();
+  const cands = switchList().map(s => {
+    const hit = s.parents.map(t => ({ t, len: t.length })).filter(x => x.t.toLowerCase().includes(want)).sort((a, b) => a.len - b.len)[0];
+    return hit ? { ...s, parentText: hit.t } : null;
+  }).filter(Boolean).sort((a, b) => a.parentText.length - b.parentText.length);
+  return cands[0] || null;
+}
+
+async function ensureSwitch(label, desired) {
+  const before = findSwitch(label);
+  if (!before) throw new Error(`Switch not found: ${label}`);
+  if (before.checked === !!desired) {
+    logInfo(`switch "${label}" already ${desired ? 'ON' : 'OFF'}`);
+    return before;
+  }
+  runCode(`async page => { await page.locator('button[role="switch"]').nth(${before.i}).click(); return 'ok'; }`);
+  await sleep(500);
+  const after = findSwitch(label);
+  if (!after) throw new Error(`Switch "${label}" disappeared after toggling.`);
+  if (after.checked !== !!desired) throw new Error(`Switch "${label}" did not reach ${desired ? 'ON' : 'OFF'} (still ${after.checked}).`);
+  logInfo(`switch "${label}": ${before.checked ? 'ON' : 'OFF'} -> ${after.checked ? 'ON' : 'OFF'}`);
+  return after;
+}
+
+function entryTierSnapshot() {
+  const expr = String.raw`() => JSON.stringify([...document.querySelectorAll('input[name^="entryTiers"][name$=".entries"]')].map(el => {
+    const name = el.getAttribute('name') || '';
+    const m = name.match(/tiers\.(\d+)\.entries/);
+    const idx = m ? Number(m[1]) : -1;
+    const art = el.closest('article') || document;
+    const badge = art.querySelector('span[data-slot="badge"]');
+    const price = art.querySelector('input[name="entryTiers.tiers.' + idx + '.price"]');
+    const impact = art.querySelector('input[name="entryTiers.tiers.' + idx + '.impact"]');
+    return {
+      idx,
+      badge: badge ? (badge.innerText || '').replace(/\s+/g, ' ').trim() : '',
+      locked: !!art.querySelector('svg.lucide-lock'),
+      disabled: !!el.disabled || el.hasAttribute('readonly'),
+      entries: el.value,
+      price: price ? price.value : '',
+      impact: impact ? impact.value : '',
+      name
+    };
+  }))`;
+  return parseJson(evalPage(expr), []);
+}
+
+// Review & Submit: section cards -> { section: { label: value } } plus media thumbnails.
+function reviewSnapshot() {
+  const expr = String.raw`() => JSON.stringify([...document.querySelectorAll('p.truncate.text-paragraph-small.font-medium')].map(h => {
+    const card = h.closest('div.overflow-hidden') || h.parentElement;
+    if (!card) return null;
+    const rows = [...card.querySelectorAll('dl > div')].map(d => {
+      const dt = d.querySelector('dt');
+      const dd = d.querySelector('dd');
+      return {
+        label: dt ? (dt.innerText || '').replace(/\s+/g, ' ').trim() : '',
+        value: dd ? (dd.innerText || '').replace(/\s+/g, ' ').trim() : '',
+        images: dd ? [...dd.querySelectorAll('img')].map(i => i.getAttribute('src') || '') : []
+      };
+    });
+    const text = (card.innerText || '').replace(/\s+/g, ' ').trim();
+    const m = text.match(/(\d+)\s+steps?\s+need/i);
+    return {
+      section: (h.innerText || '').replace(/\s+/g, ' ').trim(),
+      rows,
+      empty: /No .* added\./i.test(text),
+      needsAttention: /needs attention/i.test(text),
+      text: text.slice(0, 1500)
+    };
+  }).filter(Boolean))`;
+  const sections = parseJson(evalPage(expr), []);
+  const attentionCount = (bodyText().match(/(\d+)\s+steps?\s+need your attention/i) || [])[1] || '';
+  return {
+    sections,
+    stepsNeedingAttention: attentionCount ? Number(attentionCount) : 0,
+    attentionBanner: /needs your attention/i.test(bodyText())
+  };
+}
+
+function sweepsRowSnapshot(title) {
+  const expr = `() => {
+    const rows = [...document.querySelectorAll('tr')].filter(tr => (tr.innerText || '').includes(${JSON.stringify(title)}));
+    if (!rows.length) return JSON.stringify({ found: false });
+    const tr = rows[0];
+    const cells = [...tr.querySelectorAll('td')].map(td => (td.innerText || '').replace(/\\s+/g, ' ').trim());
+    const link = tr.querySelector('a[aria-label="Sweeps link"]');
+    const freeLink = tr.querySelector('a[aria-label="Free entry link"]');
+    const trackLink = tr.querySelector('a[aria-label="Tracking link"]');
+    const titleEl = tr.querySelector('td p[title]');
+    return JSON.stringify({
+      found: true,
+      titleCell: titleEl ? (titleEl.getAttribute('title') || '').trim() : (cells[0] || ''),
+      cells,
+      text: (tr.innerText || '').replace(/\\s+/g, ' ').trim(),
+      sweepsLink: link ? link.href : '',
+      freeEntryLink: freeLink ? freeLink.href : '',
+      trackingLink: trackLink ? trackLink.href : ''
+    });
+  }`;
+  return parseJson(evalPage(expr), { found: false });
+}
+
+function cartState() {
+  const code = `async page => {
+    const raw = await page.evaluate(async () => {
+      try {
+        const res = await fetch('/cart.js', { cache: 'no-store' });
+        const j = await res.json();
+        return {
+          ok: true,
+          item_count: j.item_count,
+          total_price: j.total_price,
+          currency: j.currency,
+          items: (j.items || []).map(it => ({ key: it.key, title: it.title, price: it.price, quantity: it.quantity, variant_id: it.variant_id }))
+        };
+      } catch (e) {
+        return { ok: false, error: String(e && e.message ? e.message : e) };
+      }
+    });
+    return JSON.stringify(raw);
+  }`;
+  const out = runCode(code);
+  const state = parseJson(out, null);
+  return state && state.ok ? state : null;
+}
+
+function storefrontSnapshot() {
+  const expr = String.raw`() => {
+    const txt = (document.body.innerText || '');
+    const entries = [...document.querySelectorAll('form[action="/cart"]')].map(f => {
+      const holder = f.parentElement || f;
+      const label = holder.querySelector('span');
+      const price = f.querySelector('.product-price');
+      const hidden = f.querySelector('input[name="cartFormInput"]');
+      let variant = '';
+      try { variant = (JSON.parse(hidden.value).inputs.lines[0].merchandiseId || '').split('/').pop(); } catch (e) {}
+      return {
+        entries: label ? (label.innerText || '').replace(/\s+/g, ' ').trim() : '',
+        price: price ? (price.innerText || '').replace(/\s+/g, ' ').trim() : '',
+        variant
+      };
+    });
+    const media = [...document.querySelectorAll('img')].map(i => ({ src: i.currentSrc || i.src || '', cls: i.className || '' }));
+    const hero = media.filter(m => /aspect-square/.test(m.cls)).map(m => m.src);
+    const thumbs = [...document.querySelectorAll('.swiper-slide img')].map(i => i.currentSrc || i.src || '');
+    const partnerLinks = [...document.querySelectorAll('a[href^="/partners/"]')].map(a => ({ href: a.getAttribute('href'), text: (a.innerText || '').replace(/\s+/g, ' ').trim() }));
+    const info = {};
+    for (const div of document.querySelectorAll('div.nowrap-md')) {
+      const t = (div.innerText || '').replace(/\s+/g, ' ').trim();
+      const m = t.match(/^([A-Z][A-Z()\/ .-]*[A-Z)]):\s*([\s\S]*)$/);
+      if (m) info[m[1].trim()] = m[2].trim();
+    }
+    return JSON.stringify({
+      url: location.href,
+      title: (document.querySelector('h1') ? document.querySelector('h1').innerText : '').trim(),
+      ends: (txt.match(/ENDS:\s*([0-9\/]+)/) || [])[1] || '',
+      badges: [...document.querySelectorAll('button')].map(b => (b.innerText || '').trim()).filter(t => /^(Live|Coming Soon|Ended)$/i.test(t)),
+      hasEnterNow: /Enter Now/i.test(txt),
+      tabs: [...document.querySelectorAll('button')].map(b => (b.innerText || '').trim()).filter(t => /^(Prize Details|Description)$/.test(t)),
+      entries,
+      media: { hero, thumbs, all: media.map(m => m.src) },
+      partnerLinks,
+      info,
+      disclaimer: /NO PURCHASE OR DONATION IS NECESSARY TO ENTER TO WIN/i.test(txt),
+      descriptionVisible: /Describe|Happy case|Automated/i.test(txt),
+      text: txt.slice(0, 6000)
+    });
+  }`;
+  return parseJson(evalPage(expr), null);
+}
+
+function normalizeCdnKey(url) {
+  const noQuery = String(url || '').split('?')[0];
+  const base = noQuery.split('/').pop() || '';
+  return base.replace(/_\d+x(?=\.[a-z0-9]+$)/i, '');
+}
+
+// ------------------------------------------------------------- form filling --
+function fillTextareaByPlaceholder(placeholders, value) {
+  const list = Array.isArray(placeholders) ? placeholders : [placeholders];
+  const tried = [];
+  for (const p of list) {
+    const css = `textarea[placeholder=${JSON.stringify(p)}]`;
+    const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
+    if (r.code === 0) {
+      logInfo(`filled textarea placeholder=${JSON.stringify(p)}`);
+      return p;
+    }
+    tried.push(p);
+  }
+  throw new Error(`No textarea matched placeholders ${JSON.stringify(tried)}`);
+}
+
+function fillRichTextAny(placeholders, value) {
+  const list = (Array.isArray(placeholders) ? placeholders : [placeholders]).filter(Boolean);
+  for (const p of list) {
+    const css = `[data-placeholder=${JSON.stringify(p)}]`;
+    const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
+    if (r.code === 0) {
+      logInfo(`filled rich text data-placeholder=${JSON.stringify(p)}`);
+      return p;
+    }
+    const r2 = cli(['click', `locator(${JSON.stringify(css)})`], { allowFailure: true });
+    if (r2.code === 0) {
+      cli(['type', String(value)], { allowFailure: true });
+      logInfo(`typed rich text data-placeholder=${JSON.stringify(p)}`);
+      return p;
+    }
+  }
+  fillRichTextLast(value);
+  logInfo('filled rich text via last contenteditable fallback');
+  return '(last contenteditable)';
+}
+
+function listMenuOptions() {
+  const expr = String.raw`() => JSON.stringify([...document.querySelectorAll('[role="menuitemcheckbox"], [role="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="select-item"]')].map((el, i) => ({
+    i,
+    text: (el.innerText || '').replace(/\s+/g, ' ').trim(),
+    disabled: el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('data-disabled') || el.hasAttribute('disabled') || /pointer-events-none|opacity-50/.test(el.className || '')
+  })).filter(o => o.text))`;
+  return parseJson(evalPage(expr), []);
+}
+
+async function selectMenuOption({ triggerTarget, preferredText, label }) {
+  click(triggerTarget);
+  await sleep(800);
+  const options = listMenuOptions();
+  if (!options.length) throw new Error(`${label}: menu opened but no options detected.`);
+  let idx = -1;
+  if (preferredText && String(preferredText).trim()) {
+    const want = String(preferredText).trim().toLowerCase();
+    idx = options.findIndex(o => !o.disabled && (o.text.toLowerCase() === want || o.text.toLowerCase().includes(want)));
+  }
+  if (idx === -1) idx = options.findIndex(o => !o.disabled);
+  if (idx === -1) throw new Error(`${label}: no enabled options (found ${options.map(o => JSON.stringify(o.text)).join(', ')})`);
+  runCode(`async page => { await page.locator('[role="menuitemcheckbox"], [role="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="select-item"]').nth(${idx}).click(); return 'ok'; }`);
+  await sleep(600);
+  logInfo(`${label}: selected option [${idx}] ${options[idx].text}`);
+  return { index: idx, text: options[idx].text, options: options.map(o => ({ text: o.text, disabled: o.disabled })) };
+}
+
 module.exports = {
   ROOT, config, resultsDir, cli, sleep, clean, writeJson, env, stampNow,
   logInfo, logWarn,
@@ -269,5 +593,9 @@ module.exports = {
   listFileInputs, dropFiles, uploadFiles, setInputFiles, robustUpload,
   captureVisibleErrors, galleryItemsText, galleryTileCount,
   listComboboxOptions, selectCombobox,
-  fillRichTextLast, fillRichTextByPlaceholder, waitForText
+  fillRichTextLast, fillRichTextByPlaceholder, waitForText,
+  parseRequestLines, networkList, networkMark, networkSince, requestDetails, networkSummary,
+  parseJson, readValues, switchList, findSwitch, ensureSwitch,
+  entryTierSnapshot, reviewSnapshot, sweepsRowSnapshot, cartState, storefrontSnapshot,
+  normalizeCdnKey, fillTextareaByPlaceholder, fillRichTextAny, listMenuOptions, selectMenuOption
 };
