@@ -137,8 +137,6 @@ function listFileInputs() {
 }
 
 function dropFiles(target, absPaths) {
-  const args = ['drop', target];
-  for (const p of absPaths) args.push(`--path=${p}`);
   return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
 }
 
