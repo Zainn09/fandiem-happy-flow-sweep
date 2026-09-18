@@ -127,6 +127,13 @@ if (report.storefrontChecks) {
     kv('Entries', (sn.entries || []).map(e => `${e.entries} ${e.price} v${e.variant}`).join(' | '));
   }
 }
+if (report.parity) {
+  head('Admin <-> storefront parity');
+  kv('Review values missing', (report.parity.reviewMissing || []).length);
+  for (const m of report.parity.reviewMissing || []) console.log(`      ${m.section} / ${m.label || '-'}: ${truncate(m.expected, 70)}`);
+  kv('Storefront values missing', (report.parity.storefrontMissing || []).length);
+  for (const m of report.parity.storefrontMissing || []) console.log(`      ${m.label}: ${truncate(m.expected, 70)}`);
+}
 if (cart) {
   head('Cart buttons');
   console.log(`  ${cart.length} buttons exercised`);
