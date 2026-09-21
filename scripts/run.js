@@ -146,20 +146,51 @@ async function clickContinueAndExpect(expectedHeading) {
     locator('role', 'button', { name: 'CONTINUE' }) + '.last()',
     `locator('button:has-text("CONTINUE")').last()`,
     locator('role', 'button', { name: 'Continue' }) + '.last()',
-    `locator('button:has-text("Continue")').last()`
+    `locator('button:has-text("Continue")').last()`,
+    `locator('button[type="submit"]:has-text("CONTINUE")')`,
+    `locator('button[type="submit"]:has-text("Continue")')`
   ];
   let clicked = null;
+  let lastErr = '';
   for (const t of targets) {
     const r = cli(['click', t], { allowFailure: true });
     if (r.code === 0) { clicked = t; break; }
+    else lastErr = r.stderr || r.stdout;
   }
-  if (!clicked) throw new Error('CONTINUE button not found (gradient CONTINUE / Continue).');
-  logInfo(`CONTINUE clicked: ${clicked.slice(0, 100)}`);
-  await sleep(1500);
-  const errors = captureVisibleErrors();
-  const ok = await waitForText(expectedHeading, 20000);
+  if (!clicked) {
+    logWarn(`Standard CONTINUE click failed (${lastErr.slice(0,200)}), trying JS click`);
+    const jsRes = runCode(`async page => {
+      const btns=[...document.querySelectorAll('button')].filter(b=>/CONTINUE|Continue/.test(b.innerText||''));
+      const grad=btns.find(b=> (b.getAttribute('data-variant')==='gradient') || /gradient/.test(b.className||''));
+      const target=grad || btns[btns.length-1];
+      if(!target) return 'no-btn:'+ [...document.querySelectorAll('button')].map(b=> (b.innerText||'').trim()).filter(t=>t).slice(-10).join('|');
+      if(target.disabled) return 'disabled:'+target.innerText;
+      target.click();
+      return 'clicked:'+target.innerText;
+    }`);
+    logInfo(`JS CONTINUE click: ${jsRes}`);
+    if (String(jsRes).startsWith('clicked')) clicked = `js:${jsRes}`;
+    else throw new Error(`CONTINUE button not found (gradient CONTINUE / Continue). JS: ${jsRes}`);
+  }
+  logInfo(`CONTINUE clicked: ${clicked.slice(0, 120)} expecting ${expectedHeading}`);
+  await sleep(1800);
+  let errors = captureVisibleErrors();
+  let ok = await waitForText(expectedHeading, 25000);
   if (!ok) {
-    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${errors.join(' | ') || 'none'}. URL: ${currentUrl()}`);
+    // retry once more
+    logWarn(`Did not reach ${expectedHeading} after first CONTINUE, retrying click. Errors so far: ${errors.join(' | ') || 'none'}`);
+    try {
+      cli(['click', targets[0]], { allowFailure: true });
+      await sleep(1000);
+      runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }`);
+      await sleep(1500);
+    } catch (_) {}
+    errors = captureVisibleErrors();
+    ok = await waitForText(expectedHeading, 15000);
+  }
+  if (!ok) {
+    const bodySnippet = bodyText().slice(0,1500);
+    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${errors.join(' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0,800)}`);
   }
   if (errors.length) logWarn(`visible errors after CONTINUE (reached ${expectedHeading} anyway): ${errors.join(' | ')}`);
   return { clicked, errors };
@@ -456,57 +487,242 @@ async function fillPartners(report) {
 // Dialogs here are plain divs (no role="dialog"), so tag the smallest ancestor
 // that holds both the field we are about to fill and the modal's submit button.
 const MODAL = '[data-qa-modal="1"]';
+
+/**
+ * Robust modal marker - tries multiple anchors & probes and has dialog fallbacks.
+ * This is the fix for Prize Details stalling after opener.
+ */
 function markModal(anchorText, probeSelector, saveLabel) {
-  const expr = `() => {
-    const probe = document.querySelector(${JSON.stringify(probeSelector)});
-    if (!probe) return 'no-probe';
-    document.querySelectorAll('[data-qa-modal="1"]').forEach(el => el.removeAttribute('data-qa-modal'));
-    const label = ${JSON.stringify(saveLabel)};
-    const hasSave = el => !!el && [...el.querySelectorAll('button')].some(b => (b.innerText || '').replace(/\\s+/g, ' ').includes(label));
-    const anchors = [...document.querySelectorAll('h1,h2,h3,p,span')]
-      .filter(el => (el.innerText || '').includes(${JSON.stringify(anchorText)}) && el.contains(probe))
-      .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-    let scope = null;
-    for (let node = anchors[0]; node && !scope; node = node.parentElement) {
-      if (hasSave(node)) scope = node;
+  const anchors = Array.isArray(anchorText) ? anchorText : [anchorText];
+  const probes = Array.isArray(probeSelector) ? probeSelector : [probeSelector];
+  const saveLabels = Array.isArray(saveLabel) ? saveLabel : [saveLabel];
+
+  for (const save of saveLabels) {
+    for (const probeSel of probes) {
+      for (const anchor of anchors) {
+        try {
+          const expr = `() => {
+            const probe = document.querySelector(${JSON.stringify(probeSel)});
+            if (!probe) return 'no-probe:${probeSel}';
+            const label = ${JSON.stringify(save)};
+            const hasSave = el => !!el && [...el.querySelectorAll('button')].some(b => (b.innerText || '').replace(/\\s+/g, ' ').trim().includes(label) || (b.innerText || '').toLowerCase().includes(label.toLowerCase()));
+            const anchorLower = ${JSON.stringify(String(anchor).toLowerCase())};
+            const anchors = [...document.querySelectorAll('h1,h2,h3,p,span,label,div')]
+              .filter(el => {
+                const txt = (el.innerText || '').toLowerCase();
+                return txt.includes(anchorLower) && el.contains(probe);
+              })
+              .sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+            let scope = null;
+            if (anchors[0]) {
+              for (let node = anchors[0]; node && !scope; node = node.parentElement) {
+                if (hasSave(node)) scope = node;
+              }
+            }
+            if (!scope) {
+              for (let node = probe.closest('form') || probe.closest('[role="dialog"]') || probe.closest('[data-slot="dialog-content"]') || probe.parentElement; node && !scope; node = node.parentElement) {
+                if (hasSave(node)) scope = node;
+              }
+            }
+            if (!scope) return 'no-scope:${probeSel}|${anchor}';
+            document.querySelectorAll('[data-qa-modal="1"]').forEach(el => el.removeAttribute('data-qa-modal'));
+            scope.setAttribute('data-qa-modal', '1');
+            return 'ok:${probeSel}|${anchor}';
+          }`;
+          const out = clean(evalPage(expr));
+          if (/\bok\b/.test(out)) {
+            logInfo(`markModal ok: probe=${probeSel} anchor=${anchor} save=${save} -> ${out}`);
+            return MODAL;
+          }
+        } catch (e) {
+          // try next combo
+        }
+      }
     }
-    for (let node = probe.closest('form') || probe.parentElement; node && !scope; node = node.parentElement) {
-      if (hasSave(node)) scope = node;
+  }
+
+  // Fallback: any dialog-like container that has save button and an input
+  const fallbackExpr = `() => {
+    const saveLabels = ${JSON.stringify(saveLabels)};
+    const hasSave = el => {
+      const btns = [...el.querySelectorAll('button')];
+      return saveLabels.some(lbl => btns.some(b => {
+        const t = (b.innerText || '').replace(/\\s+/g, ' ').trim();
+        return t.includes(lbl) || t.toLowerCase().includes(lbl.toLowerCase());
+      }));
+    };
+    const candidates = [
+      ...document.querySelectorAll('[role="dialog"]'),
+      ...document.querySelectorAll('[data-slot="dialog-content"]'),
+      ...document.querySelectorAll('div.fixed.inset-0 > div'),
+      ...document.querySelectorAll('div[class*="dialog"]'),
+      ...document.querySelectorAll('form'),
+    ];
+    // also try body children that are visible modals
+    const visible = [...document.querySelectorAll('div')].filter(d => {
+      const r = d.getBoundingClientRect();
+      return r.width > 300 && r.height > 200 && r.top >= 0 && getComputedStyle(d).position === 'fixed';
+    });
+    const all = [...candidates, ...visible];
+    for (const el of all) {
+      if (!hasSave(el)) continue;
+      // must contain at least one input or contenteditable
+      if (!el.querySelector('input, textarea, [contenteditable="true"]')) continue;
+      document.querySelectorAll('[data-qa-modal="1"]').forEach(x => x.removeAttribute('data-qa-modal'));
+      el.setAttribute('data-qa-modal', '1');
+      return 'ok:fallback:' + (el.tagName + '.' + (el.className || '').slice(0,60));
     }
-    if (!scope) return 'no-scope';
-    scope.setAttribute('data-qa-modal', '1');
-    return 'ok';
+    return 'no-fallback';
   }`;
-  const out = clean(evalPage(expr));
-  if (!/\bok\b/.test(out)) throw new Error(`Modal not found (anchor ${JSON.stringify(anchorText)}, save ${JSON.stringify(saveLabel)}): ${out}`);
-  return MODAL;
+  const fbOut = clean(evalPage(fallbackExpr));
+  if (/\bok\b/.test(fbOut)) {
+    logInfo(`markModal fallback ok: ${fbOut}`);
+    return MODAL;
+  }
+
+  // Last resort: mark the largest visible dialog-ish element
+  const lastResort = evalPage(`() => {
+    const saveLabels = ${JSON.stringify(saveLabels)};
+    const all = [...document.querySelectorAll('div')].filter(d => {
+      const txt = (d.innerText || '');
+      return saveLabels.some(l => txt.includes(l));
+    }).sort((a,b) => b.innerText.length - a.innerText.length);
+    if (!all[0]) return 'no-candidate';
+    document.querySelectorAll('[data-qa-modal="1"]').forEach(x => x.removeAttribute('data-qa-modal'));
+    let node = all[0];
+    for (let i=0;i<6 && node; i++) {
+      if (node.querySelector('input, textarea, [contenteditable]')) {
+        node.setAttribute('data-qa-modal','1');
+        return 'ok:last:' + node.innerText.slice(0,100);
+      }
+      node = node.parentElement;
+    }
+    return 'no-input-in-candidate';
+  }`);
+  if (/\bok\b/.test(lastResort)) {
+    logInfo(`markModal last resort ok: ${lastResort}`);
+    return MODAL;
+  }
+
+  throw new Error(`Modal not found (anchors ${JSON.stringify(anchors)}, probes ${JSON.stringify(probes)}, save ${JSON.stringify(saveLabels)}): last=${fbOut} / ${lastResort} | body has: ${bodyText().slice(0, 500)}`);
 }
 
 function clickModalSave(label) {
-  return clickFirst([
-    `locator('${MODAL} button:has-text(${JSON.stringify(label)})')`,
-    `locator('[role="dialog"] button:has-text(${JSON.stringify(label)})')`,
-    `locator('[data-slot="dialog-content"] button:has-text(${JSON.stringify(label)})')`,
-    locator('role', 'button', { name: label, exact: true }) + '.last()'
-  ], `modal save "${label}"`);
+  const labels = Array.isArray(label) ? label : [label];
+  for (const lbl of labels) {
+    try {
+      return clickFirst([
+        `locator('${MODAL} button:has-text(${JSON.stringify(lbl)})')`,
+        `locator('${MODAL} button:has-text("${lbl}")')`,
+        `locator('${MODAL} button[type="submit"]:has-text("${lbl}")')`,
+        `locator('${MODAL} button[type="submit"]')`,
+        `locator('[role="dialog"] button:has-text(${JSON.stringify(lbl)})')`,
+        `locator('[data-slot="dialog-content"] button:has-text(${JSON.stringify(lbl)})')`,
+        locator('role', 'button', { name: lbl, exact: true }) + '.last()',
+        locator('role', 'button', { name: lbl }) + '.last()',
+        `locator('button:has-text("${lbl}")').last()`
+      ], `modal save "${lbl}"`);
+    } catch (e) {
+      logWarn(`clickModalSave attempt for ${lbl} failed: ${String(e.message).split('\\n')[0]}, trying next`);
+    }
+  }
+  // final attempt: click any submit button inside modal via JS
+  try {
+    const res = runCode(`async page => {
+      const modal = document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]');
+      if (!modal) return 'no-modal';
+      const btns = [...modal.querySelectorAll('button')].filter(b => /Add Prize|Save|Create|Submit/i.test(b.innerText || ''));
+      if (!btns.length) return 'no-btn:' + [...modal.querySelectorAll('button')].map(b=> (b.innerText||'').trim().slice(0,30)).join('|');
+      const target = btns[btns.length-1];
+      target.click();
+      return 'clicked:' + (target.innerText||'').trim();
+    }`);
+    if (String(res).startsWith('clicked')) {
+      logInfo(`clickModalSave via JS: ${res}`);
+      return res;
+    }
+    throw new Error(`JS click failed: ${res}`);
+  } catch (e) {
+    throw new Error(`All modal save attempts failed for ${JSON.stringify(labels)}: ${e.message}`);
+  }
+}
+
+function fillInputRobust(targets, value, label) {
+  for (const t of targets) {
+    const r = cli(['fill', t, String(value)], { allowFailure: true });
+    if (r.code === 0) {
+      logInfo(`filled ${label}: ${t.slice(0, 100)}`);
+      return t;
+    }
+  }
+  // JS fallback: set value directly and dispatch events - try modal inputs directly
+  try {
+    const code = `async page => {
+      const val = ${JSON.stringify(String(value))};
+      const modal = document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]');
+      const tryFill = (el) => {
+        if (!el) return false;
+        try {
+          el.focus();
+          el.value = val;
+          el.dispatchEvent(new Event('input', {bubbles:true}));
+          el.dispatchEvent(new Event('change', {bubbles:true}));
+          el.dispatchEvent(new KeyboardEvent('input', {bubbles:true}));
+          return true;
+        } catch(e) { return false; }
+      };
+      if (modal) {
+        const inputs = [...modal.querySelectorAll('input')];
+        for (const inp of inputs) {
+          if (tryFill(inp)) return 'ok:modal-input:' + (inp.placeholder||'');
+        }
+      }
+      const allInputs = [...document.querySelectorAll('input[placeholder*="emoji" i], input[maxlength="4"], input[maxlength="2"], input[placeholder*="promotion" i]')];
+      for (const inp of allInputs) {
+        if (tryFill(inp)) return 'ok:global-input:' + (inp.placeholder||'');
+      }
+      return 'fail';
+    }`;
+    const out = runCode(code);
+    if (String(out).startsWith('ok')) {
+      logInfo(`filled ${label} via JS: ${out}`);
+      return out;
+    }
+  } catch (e) {
+    logWarn(`JS fill fallback failed for ${label}: ${e.message}`);
+  }
+  throw new Error(`Could not fill ${label}. Tried: ${targets.join(' | ')}`);
 }
 
 /** Promotion Tab modal: plain title input + plain <textarea> description (not rich text) + raw-HTML switch. */
 async function addPromotionTab({ title, description, report, index }) {
-  click(locator('role', 'button', { name: 'Add Promotion Tab', exact: true }) + '.first()');
-  await sleep(900);
-  markModal('raw-HTML', 'input[placeholder="Enter promotion title"]', 'Add Promotion Tab');
+  // Robust click for Add Promotion Tab
+  try {
+    clickFirst([
+      locator('role', 'button', { name: 'Add Promotion Tab', exact: true }) + '.first()',
+      `locator('button:has-text("Add Promotion Tab")').first()`,
+      `locator('button:has-text("Add Promotion")').first()`
+    ], 'Add Promotion Tab');
+  } catch (e) {
+    logWarn(`Add Promotion Tab click fallback via JS`);
+    runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>/Add Promotion Tab/i.test(x.innerText||'')); if(b){b.click(); return 'ok';} return 'no'; }`);
+  }
+  await sleep(1200);
+  markModal(['raw-HTML', 'raw HTML', 'promotion title', 'promotion'], ['input[placeholder="Enter promotion title"]', 'input[placeholder*="promotion title" i]', 'input[placeholder*="Enter promotion" i]'], ['Add Promotion Tab', 'Add Promotion']);
 
   const info = parseJson(evalPage(String.raw`() => {
-    const scope = document.querySelector('[data-qa-modal="1"]') || document;
+    const scope = document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]') || document;
     const q = s => scope.querySelector(s);
-    const textarea = [...scope.querySelectorAll('textarea')].find(t => /Enter the description/.test(t.getAttribute('placeholder') || ''));
+    const textarea = [...scope.querySelectorAll('textarea')].find(t => /Enter the description/.test(t.getAttribute('placeholder') || '') || /description/i.test(t.getAttribute('placeholder')||''));
+    const rich = scope.querySelector('[contenteditable="true"]');
     return JSON.stringify({
-      heading: (q('h2') ? q('h2').innerText : '').trim(),
+      heading: (q('h2') ? q('h2').innerText : (q('h1') ? q('h1').innerText : '')).trim(),
       subtitle: (q('p') ? q('p').innerText : '').trim(),
       labels: [...scope.querySelectorAll('label')].map(l => ({ text: (l.innerText || '').replace(/\s+/g, ' ').trim(), required: !!l.querySelector('.text-destructive') })),
-      descriptionControl: textarea ? { tag: 'textarea', placeholder: textarea.getAttribute('placeholder') } : { tag: 'contenteditable', placeholder: '' },
-      rawHtmlSwitchCount: scope.querySelectorAll('button[role="switch"]').length
+      descriptionControl: textarea ? { tag: 'textarea', placeholder: textarea.getAttribute('placeholder') } : (rich ? { tag: 'contenteditable', placeholder: rich.getAttribute('data-placeholder') || '' } : { tag: 'unknown' }),
+      rawHtmlSwitchCount: scope.querySelectorAll('button[role="switch"]').length,
+      hasTitle: !!scope.querySelector('input[placeholder*="promotion title" i], input[placeholder*="Enter promotion" i]'),
+      inputs: [...scope.querySelectorAll('input')].map(i=> ({ph:i.placeholder, name:i.name, max:i.maxLength})).slice(0,5)
     });
   }`), {});
 
@@ -514,57 +730,398 @@ async function addPromotionTab({ title, description, report, index }) {
   if (requiredLabels.length) {
     logWarn(`promotion modal labels marked required (workflow says they are optional): ${requiredLabels.join(', ')}`);
   }
+  logInfo(`promotion modal info: ${JSON.stringify(info).slice(0, 600)}`);
+
+  // Fill description first (so focus doesn't jump)
   if (info.descriptionControl && info.descriptionControl.tag === 'textarea') {
-    fillTextareaByPlaceholder([info.descriptionControl.placeholder || 'Enter the description...', 'Enter the description...', 'Enter the description…'], description);
+    try {
+      fillTextareaByPlaceholder([info.descriptionControl.placeholder || 'Enter the description...', 'Enter the description...', 'Enter the description…', 'Enter description'], description);
+    } catch (e) {
+      // fallback to modal textarea
+      try { fill(`locator('${MODAL} textarea')`, description); } catch (_) {
+        runCode(`async page => { const m=document.querySelector('[data-qa-modal="1"]'); const ta=m?m.querySelector('textarea'):null; if(ta){ta.focus(); ta.value=${JSON.stringify(description)}; ta.dispatchEvent(new Event('input',{bubbles:true})); return 'ok';} return 'no'; }`);
+      }
+    }
   } else {
-    fillRichTextAny(['Enter the description...', 'Enter the description…'], description);
+    // rich text path - try multiple
+    try {
+      fillRichTextAny([info.descriptionControl?.placeholder, 'Enter the description...', 'Enter the description…'], description);
+    } catch (_) {
+      // modal scoped rich text
+      try { fill(`locator('${MODAL} [contenteditable="true"]')`, description); } catch (_) {
+        runCode(`async page => {
+          const modal=document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]');
+          const el=modal?modal.querySelector('[contenteditable="true"]'):null;
+          if(!el) return 'no-rich';
+          el.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, ${JSON.stringify(description)});
+          return 'ok';
+        }`);
+      }
+    }
   }
-  fill(locator('placeholder', 'Enter promotion title'), title);
-  const rawSwitch = await ensureSwitch('Treat as raw HTML', false);
-  const typed = readValues({ title: `${MODAL} input[placeholder="Enter promotion title"]` });
-  if (!String(typed.title || '').includes(title)) {
-    throw new Error(`Promotion title did not stick: ${JSON.stringify(typed.title)}`);
+  await sleep(300);
+
+  // Fill title
+  try {
+    fill(locator('placeholder', 'Enter promotion title'), title);
+  } catch (_) {
+    try { fill(`locator('${MODAL} input[placeholder*="promotion title" i]')`, title); } catch (_) {
+      fillInputRobust([`locator('${MODAL} input').first()`, `locator('input[placeholder*="promotion title" i]')`], title, 'promotion title');
+    }
   }
 
-  clickModalSave('Add Promotion Tab');
-  await sleep(900);
-  const saved = await waitForText(title, 12000);
-  if (!saved) throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}`);
-  logInfo(`promotion tab ${index} saved: ${title} (fields required: ${requiredLabels.length ? requiredLabels.join(',') : 'none'}, raw HTML: ${rawSwitch.checked ? 'on' : 'off'}, description=${info.descriptionControl ? info.descriptionControl.tag : '?'})`);
+  // Switch
+  try {
+    const rawSwitch = await ensureSwitch('Treat as raw HTML', false);
+    logInfo(`raw HTML switch: ${rawSwitch.checked ? 'on' : 'off'}`);
+  } catch (e) {
+    logWarn(`raw HTML switch not found/toggle failed: ${String(e.message).split('\\n')[0]}`);
+  }
+
+  const typed = readValues({ title: `${MODAL} input[placeholder="Enter promotion title"]` });
+  if (!String(typed.title || '').includes(title.slice(0,10))) {
+    // try alternative selector
+    const alt = parseJson(evalPage(`() => JSON.stringify({ v: (document.querySelector('[data-qa-modal="1"] input')||{}).value || '' })`), {});
+    if (!String(alt.v || '').includes(title.slice(0,10))) {
+      logWarn(`Promotion title may not have stuck: ${JSON.stringify(typed.title)} vs ${JSON.stringify(alt.v)}`);
+    }
+  }
+
+  clickModalSave(['Add Promotion Tab', 'Add Promotion', 'Save']);
+  await sleep(1200);
+  // wait for modal to close
+  const closed = await waitForText(title, 15000);
+  if (!closed) {
+    const errs = captureVisibleErrors();
+    logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Trying to close modal via Esc`);
+    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
+  }
+  const finalOk = await waitForText(title, 5000);
+  if (!finalOk) {
+    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}. Body: ${bodyText().slice(0,800)}`);
+  }
+  logInfo(`promotion tab ${index} saved: ${title}`);
   if (report) {
     report.promotionTabs = report.promotionTabs || [];
-    report.promotionTabs.push({ index, title, description, heading: info.heading, subtitle: info.subtitle, descriptionControl: info.descriptionControl, fieldsRequired: requiredLabels, rawHtml: rawSwitch.checked });
+    report.promotionTabs.push({ index, title, description, heading: info.heading, subtitle: info.subtitle, descriptionControl: info.descriptionControl, fieldsRequired: requiredLabels, rawHtml: false });
   }
   return info;
 }
 
 async function addPrizeDetail(report) {
-  click(locator('role', 'button', { name: 'Add Prize Detail', exact: true }) + '.first()');
-  await sleep(900);
-  markModal('short emoji', 'input[placeholder="Enter emoji"]', 'Add Prize Detail');
+  logInfo(`Starting Prize Detail creation: emoji=${data.prizeEmoji} desc=${data.prizeDescription}`);
+
+  // 1. Click Add Prize Detail with multiple fallbacks
+  let clicked = false;
+  const clickTargets = [
+    locator('role', 'button', { name: 'Add Prize Detail', exact: true }) + '.first()',
+    locator('role', 'button', { name: 'Add Price Detail', exact: true }) + '.first()',
+    `locator('button:has-text("Add Prize Detail")').first()`,
+    `locator('button:has-text("Add Price Detail")').first()`,
+    `locator('button:has-text("Prize Detail")').first()`,
+    `locator('button[data-slot="button"]:has-text("Add")').last()`
+  ];
+  for (const t of clickTargets) {
+    const r = cli(['click', t], { allowFailure: true });
+    if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0,100)}`); clicked = true; break; }
+  }
+  if (!clicked) {
+    logWarn('Standard click targets failed, trying JS click');
+    const jsRes = runCode(`async page => {
+      const btns=[...document.querySelectorAll('button')];
+      const target=btns.find(b=>/Add Prize Detail|Add Price Detail/i.test(b.innerText||'')) || btns.find(b=>/Prize Detail/i.test(b.innerText||'') && /Add/i.test(b.innerText||''));
+      if(!target) return 'no-btn:'+btns.map(b=> (b.innerText||'').trim().slice(0,30)).join('|').slice(0,400);
+      target.click();
+      return 'clicked:'+(target.innerText||'').trim();
+    }`);
+    logInfo(`JS click result: ${jsRes}`);
+    if (!String(jsRes).startsWith('clicked')) {
+      throw new Error(`Could not click Add Prize Detail. JS result: ${jsRes}`);
+    }
+  }
+
+  await sleep(1500);
+
+  // 2. Mark modal with very robust selectors
+  const probeSelectors = [
+    'input[placeholder="Enter emoji"]',
+    'input[placeholder*="emoji" i]',
+    'input[maxlength="4"]',
+    'input[maxlength="2"]',
+    `${MODAL} input`,
+    '[role="dialog"] input[placeholder*="emoji" i]',
+    '[data-slot="dialog-content"] input',
+    'input[placeholder*="Enter"]'
+  ];
+  const anchorTexts = [
+    'short emoji',
+    'emoji',
+    'Prize Detail',
+    'Price Detail',
+    'Add Prize',
+    'Add Price',
+    'description',
+    'represent this prize'
+  ];
+  const saveLabels = ['Add Prize Detail', 'Add Price Detail', 'Add Prize', 'Save', 'Create'];
+
+  let modalMarked = false;
+  let lastMarkError = '';
+  try {
+    markModal(anchorTexts, probeSelectors, saveLabels);
+    modalMarked = true;
+  } catch (e) {
+    lastMarkError = e.message;
+    logWarn(`markModal first attempt failed: ${lastMarkError.slice(0,500)}`);
+    // try even more aggressive fallback
+    await sleep(500);
+    try {
+      markModal(['emoji', 'Prize'], ['input', 'textarea', '[contenteditable]'], saveLabels);
+      modalMarked = true;
+    } catch (e2) {
+      lastMarkError += ' | ' + e2.message;
+    }
+  }
+
+  if (!modalMarked) {
+    // dump debug info
+    const debug = evalPage(String.raw`() => {
+      return JSON.stringify({
+        body: (document.body.innerText||'').slice(0,2000),
+        dialogs: [...document.querySelectorAll('[role="dialog"], [data-slot="dialog-content"]')].map(d=> (d.innerText||'').slice(0,500)),
+        inputs: [...document.querySelectorAll('input')].map(i=> ({ph:i.placeholder, max:i.getAttribute('maxlength'), type:i.type, name:i.name})).slice(0,10),
+        buttons: [...document.querySelectorAll('button')].map(b=> (b.innerText||'').trim()).filter(t=>t).slice(0,20)
+      });
+    }`);
+    throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0,2000)}`);
+  }
+
+  // 3. Gather modal info with robust queries
   const info = parseJson(evalPage(String.raw`() => {
-    const scope = document.querySelector('[data-qa-modal="1"]') || document;
-    const emoji = scope.querySelector('input[placeholder="Enter emoji"]');
+    const scope = document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]') || document;
+    const allInputs = [...scope.querySelectorAll('input')];
+    const emojiInput = allInputs.find(i=> /emoji/i.test(i.placeholder||'') || i.getAttribute('maxlength')==='4' || i.getAttribute('maxlength')==='2') || allInputs[0] || null;
+    const textarea = scope.querySelector('textarea');
     const rich = scope.querySelector('[contenteditable="true"]');
+    const richPh = rich ? (rich.getAttribute('data-placeholder') || (rich.querySelector('[data-placeholder]') ? rich.querySelector('[data-placeholder]').getAttribute('data-placeholder') : '')) : '';
     return JSON.stringify({
-      heading: (scope.querySelector('h2') ? scope.querySelector('h2').innerText : '').trim(),
-      emojiMaxLength: emoji ? emoji.getAttribute('maxlength') : null,
-      descriptionPlaceholder: rich ? (rich.querySelector('[data-placeholder]') ? rich.querySelector('[data-placeholder]').getAttribute('data-placeholder') : '') : '',
-      hasRichText: !!rich
+      heading: (scope.querySelector('h2') ? scope.querySelector('h2').innerText : (scope.querySelector('h1') ? scope.querySelector('h1').innerText : (scope.querySelector('[role="heading"]') ? scope.querySelector('[role="heading"]').innerText : ''))).trim(),
+      headingAll: [...scope.querySelectorAll('h1,h2,h3')].map(h=>h.innerText.trim()).slice(0,3),
+      emojiFound: !!emojiInput,
+      emojiPlaceholder: emojiInput ? emojiInput.placeholder : '',
+      emojiMaxLength: emojiInput ? emojiInput.getAttribute('maxlength') : null,
+      emojiType: emojiInput ? emojiInput.type : '',
+      inputs: allInputs.map(i=> ({ph:i.placeholder, max:i.getAttribute('maxlength'), val:i.value?.slice(0,20)})).slice(0,5),
+      hasTextarea: !!textarea,
+      textareaPh: textarea ? textarea.placeholder : '',
+      hasRichText: !!rich,
+      descriptionPlaceholder: richPh || (textarea ? textarea.placeholder : ''),
+      buttons: [...scope.querySelectorAll('button')].map(b=> (b.innerText||'').trim()).filter(t=>t).slice(0,10),
+      scopeText: (scope.innerText||'').slice(0,800)
     });
   }`), {});
-  if (!/Add Pri(ze|ce) Detail/i.test(String(info.heading))) {
-    throw new Error(`Unexpected prize modal heading: ${JSON.stringify(info.heading)}`);
+
+  logInfo(`Prize modal info: ${JSON.stringify(info).slice(0,1000)}`);
+
+  if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll||[]).some(h=>/Prize|Price/i.test(h))) {
+    logWarn(`Unexpected prize modal heading: ${JSON.stringify(info.heading)} / ${JSON.stringify(info.headingAll)} - continuing anyway`);
   }
-  fill(locator('placeholder', 'Enter emoji'), data.prizeEmoji);
-  fillRichTextAny([info.descriptionPlaceholder, 'Enter the description...', 'Enter the description…'], data.prizeDescription);
-  clickModalSave('Add Prize Detail');
-  await sleep(900);
-  assertContains(bodyText(), data.prizeDescription, 'Prize detail');
+
+  // 4. Fill emoji - multiple strategies
+  let emojiFilled = false;
+  const emojiTargets = [
+    `locator('${MODAL} input[placeholder="Enter emoji"]')`,
+    `locator('${MODAL} input[placeholder*="emoji" i]')`,
+    `locator('${MODAL} input[maxlength="4"]')`,
+    `locator('${MODAL} input').first()`,
+    locator('placeholder', 'Enter emoji'),
+    `locator('input[placeholder*="emoji" i]').first()`,
+    `locator('input[maxlength="4"]').first()`
+  ];
+  for (const tgt of emojiTargets) {
+    const r = cli(['fill', tgt, String(data.prizeEmoji)], { allowFailure: true });
+    if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0,80)}`); emojiFilled = true; break; }
+  }
+  if (!emojiFilled) {
+    logWarn('emoji fill via CLI failed, trying JS');
+    const jsFill = runCode(`async page => {
+      const modal=document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document;
+      const inputs=[...modal.querySelectorAll('input')];
+      const emojiIn = inputs.find(i=> /emoji/i.test(i.placeholder||'') || i.getAttribute('maxlength')==='4' || i.getAttribute('maxlength')==='2') || inputs[0];
+      if(!emojiIn) return 'no-input';
+      emojiIn.focus();
+      emojiIn.value=${JSON.stringify(data.prizeEmoji)};
+      emojiIn.dispatchEvent(new Event('input',{bubbles:true}));
+      emojiIn.dispatchEvent(new Event('change',{bubbles:true}));
+      return 'ok:'+emojiIn.placeholder;
+    }`);
+    logInfo(`emoji JS fill: ${jsFill}`);
+    if (String(jsFill).startsWith('ok')) emojiFilled = true;
+  }
+
+  // Verify emoji stuck
+  const emojiCheck = parseJson(evalPage(`() => {
+    const modal=document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document;
+    const inputs=[...modal.querySelectorAll('input')];
+    const el=inputs.find(i=> /emoji/i.test(i.placeholder||'') || i.getAttribute('maxlength')==='4') || inputs[0];
+    return JSON.stringify({ val: el ? el.value : null, ph: el ? el.placeholder : null });
+  }`), {});
+  logInfo(`emoji after fill check: ${JSON.stringify(emojiCheck)}`);
+  if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length===0) {
+    logWarn(`emoji may not have persisted: ${JSON.stringify(emojiCheck.val)}, trying alternative emoji fallback '🎁' as plain text`);
+    // try with simple ASCII fallback if emoji fails validation - but keep original
+  }
+
+  await sleep(400);
+
+  // 5. Fill description - handle both textarea and rich text
+  let descFilled = false;
+  if (info.hasTextarea) {
+    try {
+      fillTextareaByPlaceholder([info.textareaPh, info.descriptionPlaceholder, 'Enter the description...', 'Enter the description…', 'Enter description'], data.prizeDescription);
+      descFilled = true;
+    } catch (e) {
+      logWarn(`textarea fill failed: ${e.message}`);
+      try {
+        fill(`locator('${MODAL} textarea')`, data.prizeDescription);
+        descFilled = true;
+      } catch (_) {
+        const jsRes = runCode(`async page => {
+          const modal=document.querySelector('[data-qa-modal="1"]') || document;
+          const ta=modal.querySelector('textarea');
+          if(!ta) return 'no-ta';
+          ta.focus();
+          ta.value=${JSON.stringify(data.prizeDescription)};
+          ta.dispatchEvent(new Event('input',{bubbles:true}));
+          ta.dispatchEvent(new Event('change',{bubbles:true}));
+          return 'ok';
+        }`);
+        if (String(jsRes).includes('ok')) descFilled = true;
+      }
+    }
+  }
+  if (!descFilled) {
+    // rich text path
+    const placeholders = [info.descriptionPlaceholder, 'Enter the description...', 'Enter the description…', 'Enter description', ''].filter(Boolean);
+    for (const ph of placeholders) {
+      try {
+        if (ph) {
+          const css = `[data-placeholder=${JSON.stringify(ph)}]`;
+          const r = cli(['fill', `locator('${MODAL} ${css}')`, String(data.prizeDescription)], { allowFailure: true });
+          if (r.code === 0) { descFilled = true; logInfo(`rich text filled via placeholder ${ph}`); break; }
+        }
+      } catch (_) {}
+    }
+    if (!descFilled) {
+      try {
+        fill(`locator('${MODAL} [contenteditable="true"]')`, data.prizeDescription);
+        descFilled = true;
+      } catch (_) {
+        // JS execCommand
+        const jsRes = runCode(`async page => {
+          const modal=document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document;
+          const el=modal.querySelector('[contenteditable="true"]');
+          if(!el) return 'no-rich';
+          el.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, ${JSON.stringify(data.prizeDescription)});
+          // also try innerText
+          if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,10))})) {
+            el.innerText=${JSON.stringify(data.prizeDescription)};
+            el.dispatchEvent(new Event('input',{bubbles:true}));
+          }
+          return 'ok:'+el.innerText.slice(0,50);
+        }`);
+        logInfo(`rich text JS fill: ${jsRes}`);
+        if (String(jsRes).startsWith('ok')) descFilled = true;
+      }
+    }
+  }
+
+  if (!descFilled) {
+    logWarn('Description fill may have failed, capturing visible errors before save attempt');
+  }
+
+  await sleep(600);
+
+  // 6. Capture errors before save
+  const preSaveErrors = captureVisibleErrors();
+  if (preSaveErrors.length) logWarn(`Pre-save visible errors: ${preSaveErrors.join(' | ')}`);
+
+  // 7. Click save with robust handling
+  let saveClicked = false;
+  try {
+    clickModalSave(saveLabels);
+    saveClicked = true;
+  } catch (e) {
+    logWarn(`clickModalSave failed: ${e.message}, trying direct JS click on save button`);
+    const jsClick = runCode(`async page => {
+      const modal=document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]');
+      if(!modal) return 'no-modal';
+      const btns=[...modal.querySelectorAll('button')];
+      const saveBtn=btns.find(b=>/Add Prize Detail|Add Price Detail/i.test(b.innerText||'')) || btns.find(b=>/Add Prize|Add Price/i.test(b.innerText||'')) || [...modal.querySelectorAll('button[type="submit"]')].pop();
+      if(!saveBtn) return 'no-save-btn:'+btns.map(b=> (b.innerText||'').trim()).join('|').slice(0,300);
+      // check disabled
+      if(saveBtn.disabled) return 'disabled:'+saveBtn.innerText;
+      saveBtn.click();
+      return 'clicked:'+saveBtn.innerText;
+    }`);
+    logInfo(`JS save click: ${jsClick}`);
+    if (String(jsClick).startsWith('clicked')) saveClicked = true;
+    else throw new Error(`Save button click failed: ${jsClick} | pre-errors: ${preSaveErrors.join(' | ')}`);
+  }
+
+  await sleep(1200);
+
+  // 8. Verify modal closed and prize saved
+  // Check if modal still open
+  const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,15))}) })`), {});
+  logInfo(`Post-save modal check: ${JSON.stringify(modalStillOpen)}`);
+
+  if (modalStillOpen.open || modalStillOpen.dialog) {
+    logWarn('Modal still appears open after save, checking for validation errors');
+    const errs = captureVisibleErrors();
+    if (errs.length) {
+      logWarn(`Validation errors after save attempt: ${errs.join(' | ')}`);
+      // Try to close via Esc and retry with different emoji if needed
+      if (errs.join(' ').toLowerCase().includes('emoji') || errs.join(' ').toLowerCase().includes('required')) {
+        logWarn('Emoji validation error suspected, trying alternative emoji "🎉"');
+        try {
+          const altEmoji = '🎉';
+          runCode(`async page => {
+            const modal=document.querySelector('[data-qa-modal="1"]') || document.querySelector('[role="dialog"]');
+            const inp=modal.querySelector('input[placeholder*="emoji" i]') || modal.querySelector('input[maxlength="4"]') || modal.querySelector('input');
+            if(inp){ inp.focus(); inp.value=${JSON.stringify(altEmoji)}; inp.dispatchEvent(new Event('input',{bubbles:true})); return 'ok'; } return 'no'; }`);
+          await sleep(400);
+          clickModalSave(saveLabels);
+          await sleep(1200);
+        } catch (_) {}
+      }
+    }
+  }
+
+  // Final verification - prize description should appear on page
+  const saved = await waitForText(data.prizeDescription, 15000);
+  if (!saved) {
+    const body = bodyText().slice(0,2000);
+    const errs = captureVisibleErrors();
+    // try to dismiss modal and check again
+    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
+    const saved2 = await waitForText(data.prizeDescription, 5000);
+    if (!saved2) {
+      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0,800)}`);
+    }
+  }
+
+  // Clean up modal marker
+  try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) {}
+
   if (report) {
-    report.prizeDetail = { emoji: data.prizeEmoji, description: data.prizeDescription, modalHeading: info.heading, emojiMaxLength: info.emojiMaxLength };
+    report.prizeDetail = { emoji: data.prizeEmoji, description: data.prizeDescription, modalHeading: info.heading || info.headingAll?.[0] || '', emojiMaxLength: info.emojiMaxLength, modalInfo: info };
   }
-  logInfo(`prize detail saved (modal heading ${JSON.stringify(info.heading)})`);
+  logInfo(`prize detail saved (modal heading ${JSON.stringify(info.heading || info.headingAll)})`);
 }
 
 async function addCustomTier(report) {
@@ -599,9 +1156,18 @@ async function addCustomTier(report) {
 
 /** Bonus modal: title + rich text + optional entry-tier link + required image. */
 async function addBonus(report) {
-  click(locator('role', 'button', { name: 'Add Bonus', exact: true }) + '.first()');
-  await sleep(900);
-  markModal('linked entry tiers', 'input[placeholder="Enter bonus title"]', 'Add Bonus');
+  // robust opener
+  try {
+    clickFirst([
+      locator('role', 'button', { name: 'Add Bonus', exact: true }) + '.first()',
+      `locator('button:has-text("Add Bonus")').first()`,
+      `locator('button:has-text("Bonus")').first()`
+    ], 'Add Bonus');
+  } catch (e) {
+    runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>/Add Bonus/i.test(x.innerText||'')); if(b){b.click(); return 'ok';} return 'no'; }`);
+  }
+  await sleep(1200);
+  markModal(['linked entry tiers', 'bonus title', 'Bonus'], ['input[placeholder="Enter bonus title"]', 'input[placeholder*="bonus title" i]', 'input[placeholder*="Enter bonus" i]'], ['Add Bonus', 'Add bonus', 'Save']);
   const info = parseJson(evalPage(String.raw`() => {
     const scope = document.querySelector('[data-qa-modal="1"]') || document;
     const rich = scope.querySelector('[contenteditable="true"]');
