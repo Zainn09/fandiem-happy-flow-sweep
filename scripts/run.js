@@ -27,38 +27,70 @@ async function ensurePlaywrightAttached() {
   console.log('');
   console.log('Playwright session is not attached. Launching attach process...');
   const token = process.env.PLAYWRIGHT_MCP_EXTENSION_TOKEN || config.extensionToken;
-  if (!token) {
-    console.log('');
-    console.log('==================================================================');
-    console.log('ACTION REQUIRED IN CHROME:');
-    console.log("A Chrome tab for Playwright Extension has opened (or is already open).");
-    console.log("Please switch to Chrome and click 'Allow & select' on that tab.");
-    console.log('==================================================================');
-    console.log('');
-  }
   const attachScript = path.join(ROOT, 'scripts', 'attach.js');
-  const child = spawn(process.execPath, [attachScript], {
-    cwd: ROOT,
-    env: process.env,
-    stdio: 'inherit',
-    detached: true,
-    windowsHide: false
-  });
-  child.unref();
+
+  function launchAttach(reason) {
+    if (reason) logInfo(reason);
+    if (!token) {
+      console.log('');
+      console.log('==================================================================');
+      console.log('ACTION REQUIRED IN CHROME:');
+      console.log("A Chrome tab for Playwright Extension has opened (or is already open).");
+      console.log("Please switch to Chrome and click 'Allow & select' on that tab.");
+      console.log('==================================================================');
+      console.log('');
+    } else {
+      logInfo('Launching attach with extension token (should connect instantly)...');
+    }
+    try {
+      const child = spawn(process.execPath, [attachScript], {
+        cwd: ROOT,
+        env: process.env,
+        stdio: 'inherit',
+        detached: true,
+        windowsHide: false
+      });
+      child.unref();
+    } catch (e) {
+      logWarn(`Failed to spawn attach.js: ${e.message}`);
+    }
+    // Best-effort: also try to open a new blank tab which can trigger extension UI to re-appear
+    try {
+      cli(['tab-new', 'about:blank'], { allowFailure: true });
+    } catch (_) {}
+  }
+
+  launchAttach('Initial attach attempt...');
+
   const deadline = Date.now() + 60000;
+  let attempts = 0;
   while (Date.now() < deadline) {
     await sleep(2000);
+    attempts++;
     const probe = cli(['snapshot'], { allowFailure: true });
     if (probe.code === 0) {
       console.log('\nPlaywright successfully attached to Chrome.');
       return;
     }
-    console.log("  Waiting for Playwright session connection (click 'Allow & select' in Chrome)...");
+    console.log(`  Waiting for Playwright session connection (click 'Allow & select' in Chrome)... [${attempts}]`);
+
+    // After every 5 attempts (~10s) re-open permission tab
+    if (attempts % 5 === 0) {
+      const elapsed = Math.round((Date.now() - (deadline - 60000)) / 1000);
+      console.log('');
+      console.log('------------------------------------------------------------------');
+      console.log(`Still not attached after ${elapsed}s / ${attempts} checks. Re-opening permission tab...`);
+      console.log("Please check Chrome - a new tab should have opened. Click 'Allow & select'.");
+      console.log('------------------------------------------------------------------');
+      console.log('');
+      launchAttach(`Re-launching attach process after ${attempts} attempts (${elapsed}s)...`);
+    }
   }
   throw new Error(
     'Could not attach Playwright to the existing Chrome profile within 60s.\n' +
     "Make sure the Playwright extension is installed and you click 'Allow & select' when prompted,\n" +
-    'or configure extensionToken in config.json / PLAYWRIGHT_MCP_EXTENSION_TOKEN.'
+    'or configure extensionToken in config.json / PLAYWRIGHT_MCP_EXTENSION_TOKEN.\n' +
+    'The code now re-opens the permission tab every 10s automatically.'
   );
 }
 
