@@ -74,7 +74,9 @@ function fill(target, value) { cli(['fill', target, String(value)]); }
 function press(key) { cli(['press', key]); }
 function goto(url) { cli(['goto', url]); }
 function screenshot(filename) { cli(['screenshot', `--filename=${filename}`], { allowFailure: true }); }
-function evalPage(expression) { return cli(['eval', expression], { raw: true }).stdout.trim(); }
+function decodeEvalResult(raw) { let t = String(raw == null ? '' : raw).trim(), v; while (t.length > 1 && t[0] === '"' && t[t.length - 1] === '"') { try { v = JSON.parse(t); } catch (_) { break; } if (typeof v !== 'string') break; t = v.trim(); } return t === 'undefined' || t === 'null' ? '' : t; }
+function evalPage(expression) { return decodeEvalResult(cli(['eval', expression], { raw: true }).stdout); }
+function runCode(code) { return decodeEvalResult(cli(['run-code', code], { raw: true }).stdout); }
 function runCode(code) { return cli(['run-code', code], { raw: true }).stdout.trim(); }
 function tabNew(url) { return url ? cli(['tab-new', url]).stdout : cli(['tab-new']).stdout; }
 function tabList() { return cli(['tab-list']).stdout; }
