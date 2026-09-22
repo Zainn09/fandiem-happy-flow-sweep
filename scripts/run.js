@@ -2137,3 +2137,19 @@ async function main() {
 }
 
 main();
+
+// ==============================================================================
+// LATEST FILE MARKER - This indicates this is the latest version
+// Commit: 14daeab - fix: Gallery upload failing - no file inputs found, playwright-cli exit 1
+// Date: 2026-09-22T17:33:22.961325
+// Branch: arena/01a0c517-fandiem-happy-flow-sweep
+// This file contains all fixes:
+// - Campaigns click robust (8 selectors, JS fallback, direct navigation)
+// - Partners dropdowns robust (5 selectors, JS fallback, placeholder)
+// - safeJoin for all .join crashes (inputs.map, errors.join, captureVisibleErrors.join)
+// - listFileInputs always returns array with multiple selectors
+// - Gallery upload robust (5 drop targets, wait for file inputs, JS visibility)
+// - Prize Details modal fix, Allow & Select re-open every 10s via attach.js
+// If you see this comment, you have the latest file
+// ==============================================================================
+
