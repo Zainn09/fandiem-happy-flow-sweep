@@ -199,11 +199,7 @@ async function clickContinueAndExpect(expectedHeading) {
     else lastErr = r.stderr || r.stdout;
   }
   if (!clicked) {
-<<<<<<< HEAD
     logWarn(`Standard CONTINUE click failed (${lastErr.slice(0, 200)}), trying JS click`);
-=======
-    logWarn(`Standard CONTINUE click failed (${lastErr.slice(0,200)}), trying JS click`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     const jsRes = runCode(`async page => {
       const btns=[...document.querySelectorAll('button')].filter(b=>/CONTINUE|Continue/.test(b.innerText||''));
       const grad=btns.find(b=> (b.getAttribute('data-variant')==='gradient') || /gradient/.test(b.className||''));
@@ -223,33 +219,19 @@ async function clickContinueAndExpect(expectedHeading) {
   let ok = await waitForText(expectedHeading, 25000);
   if (!ok) {
     // retry once more
-<<<<<<< HEAD
-    logWarn(`Did not reach ${expectedHeading} after first CONTINUE, retrying click. Errors so far: ${errors.join(' | ') || 'none'}`);
-=======
     logWarn(`Did not reach ${expectedHeading} after first CONTINUE, retrying click. Errors so far: ${safeJoin(errors, ' | ') || 'none'}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     try {
       cli(['click', targets[0]], { allowFailure: true });
       await sleep(1000);
       runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }`);
       await sleep(1500);
-<<<<<<< HEAD
     } catch (_) { }
     errors = captureVisibleErrors();
     ok = await waitForText(expectedHeading, 15000);
   }
   if (!ok) {
     const bodySnippet = bodyText().slice(0, 1500);
-    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${errors.join(' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0, 800)}`);
-=======
-    } catch (_) {}
-    errors = captureVisibleErrors();
-    ok = await waitForText(expectedHeading, 15000);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
-  }
-  if (!ok) {
-    const bodySnippet = bodyText().slice(0,1500);
-    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${safeJoin(errors, ' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0,800)}`);
+    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${safeJoin(errors, ' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0, 800)}`);
   }
   if (errors.length) logWarn(`visible errors after CONTINUE (reached ${expectedHeading} anyway): ${safeJoin(errors, ' | ')}`);
   return { clicked, errors };
@@ -372,10 +354,10 @@ function fillFirstAvailable(targets, value, label) {
 async function openSweepCreate() {
   tabNew(`${ADMIN}/admin`);
   await sleep(3000);
-  
+
   // Wait for page to load and contain Campaigns or Dashboard
   let loaded = false;
-  for (let i=0; i<10; i++) {
+  for (let i = 0; i < 10; i++) {
     const body = bodyText();
     if (/campaigns|sweeps|dashboard/i.test(body)) {
       loaded = true;
@@ -385,9 +367,9 @@ async function openSweepCreate() {
     await sleep(1000);
   }
   if (!loaded) {
-    logWarn(`Admin page may not have loaded fully, body: ${bodyText().slice(0,500)}`);
+    logWarn(`Admin page may not have loaded fully, body: ${bodyText().slice(0, 500)}`);
   }
-  
+
   // Try multiple selectors for Campaigns with retries
   let campaignsClicked = false;
   const campaignSelectors = [
@@ -400,13 +382,13 @@ async function openSweepCreate() {
     `locator('[data-testid="campaigns"]')`,
     `locator('nav >> text=Campaigns').first()`
   ];
-  
-  for (let attempt=0; attempt<3 && !campaignsClicked; attempt++) {
+
+  for (let attempt = 0; attempt < 3 && !campaignsClicked; attempt++) {
     try {
       clickFirst(campaignSelectors, 'Campaigns');
       campaignsClicked = true;
     } catch (e) {
-      logWarn(`Campaigns click attempt ${attempt+1} failed: ${e.message.slice(0,200)}`);
+      logWarn(`Campaigns click attempt ${attempt + 1} failed: ${e.message.slice(0, 200)}`);
       if (attempt < 2) {
         await sleep(1500);
         // Try JS click directly
@@ -420,7 +402,7 @@ async function openSweepCreate() {
             if (match) { match.click(); return 'clicked:' + match.tagName + ':' + (match.innerText||'').slice(0,30); }
             return 'no-match:found=' + els.filter(e=> (e.innerText||'').includes('Campaigns')).length;
           }`);
-          logInfo(`JS Campaigns attempt ${attempt+1}: ${jsRes}`);
+          logInfo(`JS Campaigns attempt ${attempt + 1}: ${jsRes}`);
           if (String(jsRes).startsWith('clicked')) {
             campaignsClicked = true;
             break;
@@ -431,7 +413,7 @@ async function openSweepCreate() {
       }
     }
   }
-  
+
   if (!campaignsClicked) {
     // Last resort: navigate directly to sweeps page
     logWarn('Could not click Campaigns after all attempts, navigating directly to /admin/sweeps');
@@ -449,13 +431,13 @@ async function openSweepCreate() {
       `locator('button:has-text("Sweeps")')`,
       `locator('text=Sweeps').first()`
     ];
-    
-    for (let attempt=0; attempt<3 && !sweepsClicked; attempt++) {
+
+    for (let attempt = 0; attempt < 3 && !sweepsClicked; attempt++) {
       try {
         clickFirst(sweepsSelectors, 'Sweeps');
         sweepsClicked = true;
       } catch (e) {
-        logWarn(`Sweeps click attempt ${attempt+1} failed: ${e.message.slice(0,200)}`);
+        logWarn(`Sweeps click attempt ${attempt + 1} failed: ${e.message.slice(0, 200)}`);
         if (attempt < 2) {
           await sleep(1000);
           try {
@@ -469,19 +451,19 @@ async function openSweepCreate() {
               sweepsClicked = true;
               break;
             }
-          } catch (_) {}
+          } catch (_) { }
         }
       }
     }
-    
+
     if (!sweepsClicked) {
       logWarn('Could not click Sweeps, navigating directly to /admin/sweeps');
       goto(`${ADMIN}/admin/sweeps`);
     }
   }
-  
+
   await sleep(1500);
-  
+
   // Try to click Create
   const createSelectors = [
     `locator('a[href="/admin/sweeps/create"]')`,
@@ -490,7 +472,7 @@ async function openSweepCreate() {
     locator('role', 'link', { name: 'Create' }),
     `locator('a[href*="/sweeps/create"]')`
   ];
-  
+
   let createClicked = false;
   for (const sel of createSelectors) {
     const r = cli(['click', sel], { allowFailure: true });
@@ -500,30 +482,30 @@ async function openSweepCreate() {
       break;
     }
   }
-  
+
   if (!createClicked) {
     logWarn('create anchor not clickable, navigating directly to /admin/sweeps/create');
     goto(`${ADMIN}/admin/sweeps/create`);
   }
-  
+
   await sleep(2500);
-  
+
   // Wait for Campaign Info heading
   let headingFound = false;
-  for (let i=0; i<10; i++) {
+  for (let i = 0; i < 10; i++) {
     if (bodyText().toLowerCase().includes('campaign info')) {
       headingFound = true;
       break;
     }
     await sleep(800);
   }
-  
+
   if (!headingFound) {
-    logWarn(`Campaign Info heading not found, body: ${bodyText().slice(0,800)}, trying direct navigation`);
+    logWarn(`Campaign Info heading not found, body: ${bodyText().slice(0, 800)}, trying direct navigation`);
     goto(`${ADMIN}/admin/sweeps/create`);
     await sleep(2000);
   }
-  
+
   heading('Campaign Info');
 }
 
@@ -542,7 +524,7 @@ async function fillCampaignInfo(report) {
   try {
     inputs = listFileInputs();
     if (!Array.isArray(inputs)) {
-      logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0,200)}, coercing to []`);
+      logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0, 200)}, coercing to []`);
       inputs = [];
     }
   } catch (e) {
@@ -550,9 +532,9 @@ async function fillCampaignInfo(report) {
     inputs = [];
   }
   try {
-    logInfo(`file inputs on Campaign Info: ${JSON.stringify((Array.isArray(inputs)?inputs:[]).map(i => ({ i: i.index, accept: (i.accept||'').slice(0, 60), multiple: i.multiple })))}`);
+    logInfo(`file inputs on Campaign Info: ${JSON.stringify((Array.isArray(inputs) ? inputs : []).map(i => ({ i: i.index, accept: (i.accept || '').slice(0, 60), multiple: i.multiple })))}`);
   } catch (e) {
-    logWarn(`file inputs log failed: ${e.message}, raw: ${JSON.stringify(inputs).slice(0,500)}`);
+    logWarn(`file inputs log failed: ${e.message}, raw: ${JSON.stringify(inputs).slice(0, 500)}`);
   }
   report.media = report.media || {};
   report.media.fileInputs = inputs;
@@ -604,7 +586,7 @@ async function fillCampaignInfo(report) {
     const name = path.basename(file);
     try {
       let inputsNow = listFileInputs();
-    if (!Array.isArray(inputsNow)) inputsNow = [];
+      if (!Array.isArray(inputsNow)) inputsNow = [];
       const res = await attemptUpload({
         dropTarget: galleryTargets.drop,
         clickTarget: galleryTargets.click,
@@ -642,7 +624,7 @@ async function fillCampaignInfo(report) {
 // ----------------------------------------------- screen 2: partners ------
 async function fillPartners(report) {
   heading('Partners');
-  
+
   // Robust combobox detection - try multiple selectors
   const comboSelectors = [
     'button[type="button"][role="combobox"]',
@@ -651,10 +633,10 @@ async function fillPartners(report) {
     'button:has-text("Select talents")',
     'button:has-text("Select one or more charities")'
   ];
-  
+
   let comboCount = 0;
   let workingComboCss = comboSelectors[0];
-  
+
   for (const css of comboSelectors) {
     const count = Number(String(evalPage(`() => String(document.querySelectorAll(${JSON.stringify(css)}).length)`)).replace(/[^0-9]/g, '')) || 0;
     if (count >= 2) {
@@ -668,19 +650,19 @@ async function fillPartners(report) {
       workingComboCss = css;
     }
   }
-  
+
   // Also try counting via JS that looks for Select talents text
   const jsCount = Number(String(evalPage(`() => {
     const btns = [...document.querySelectorAll('button')];
     const talentBtns = btns.filter(b => (b.innerText||'').includes('Select talents') || (b.innerText||'').includes('Select one or more charities'));
     return String(talentBtns.length || document.querySelectorAll('[role="combobox"]').length);
   }`)).replace(/[^0-9]/g, '')) || 0;
-  
+
   if (jsCount > comboCount) {
     comboCount = jsCount;
     logInfo(`JS detected comboboxes: ${jsCount}`);
   }
-  
+
   logInfo(`comboboxes on Partners: ${comboCount} (using ${workingComboCss})`);
   if (comboCount < 1) {
     logWarn(`Expected 2 comboboxes on Partners, found ${comboCount}, will try anyway`);
@@ -695,7 +677,7 @@ async function fillPartners(report) {
     `locator('button').filter({ hasText: 'Select talents' }).first()`,
     `locator('[data-slot="select-trigger"]').first()`
   ];
-  
+
   for (const target of talentTargets) {
     try {
       talent = await selectComboboxWithFallback({
@@ -705,10 +687,10 @@ async function fillPartners(report) {
       });
       if (talent) break;
     } catch (e) {
-      logWarn(`Talent select failed with ${target}: ${String(e.message).slice(0,200)}`);
+      logWarn(`Talent select failed with ${target}: ${String(e.message).slice(0, 200)}`);
     }
   }
-  
+
   if (!talent) {
     // Last resort JS click
     logWarn('All talent select attempts failed, trying JS fallback');
@@ -728,13 +710,13 @@ async function fillPartners(report) {
       }`);
       logInfo(`JS talent fallback: ${jsRes}`);
       if (String(jsRes).startsWith('clicked')) {
-        talent = { text: String(jsRes).replace('clicked:',''), index: 0, optionsCount: 1, options: [String(jsRes)] };
+        talent = { text: String(jsRes).replace('clicked:', ''), index: 0, optionsCount: 1, options: [String(jsRes)] };
       }
     } catch (e) {
       logWarn(`JS talent fallback failed: ${e.message}`);
     }
   }
-  
+
   if (!talent) throw new Error('Could not select talent partner after all attempts');
 
   // The chosen partner must render as a removable badge
@@ -750,7 +732,7 @@ async function fillPartners(report) {
   try {
     fillFirstAvailable(
       [
-        `locator('input[name="promoContent.artistQuoteTitle"]')`, 
+        `locator('input[name="promoContent.artistQuoteTitle"]')`,
         `locator('textarea[name="promoContent.artistQuoteTitle"]')`,
         `locator('input[placeholder="A word from the artist"]').first()`,
         `locator('input[placeholder*="word from the artist" i]').first()`,
@@ -773,13 +755,13 @@ async function fillPartners(report) {
       return 'ok:'+target.placeholder;
     }`);
   }
-  
+
   await sleep(300);
-  
+
   try {
     fillFirstAvailable(
       [
-        `locator('textarea[name="promoContent.artistQuote"]')`, 
+        `locator('textarea[name="promoContent.artistQuote"]')`,
         `locator('input[name="promoContent.artistQuote"]')`,
         `locator('textarea[placeholder="A word from the artist"]').first()`,
         `locator('textarea[placeholder*="word from the artist" i]').first()`
@@ -813,7 +795,7 @@ async function fillPartners(report) {
     `locator('[data-slot="select-trigger"]').nth(1)`,
     `locator('[data-slot="select-trigger"]').last()`
   ];
-  
+
   for (const target of charityTargets) {
     try {
       charity = await selectComboboxWithFallback({
@@ -823,10 +805,10 @@ async function fillPartners(report) {
       });
       if (charity) break;
     } catch (e) {
-      logWarn(`Charity select failed with ${target}: ${String(e.message).slice(0,200)}`);
+      logWarn(`Charity select failed with ${target}: ${String(e.message).slice(0, 200)}`);
     }
   }
-  
+
   if (!charity) {
     logWarn('All charity select attempts failed, trying JS fallback');
     try {
@@ -844,7 +826,7 @@ async function fillPartners(report) {
       }`);
       logInfo(`JS charity fallback: ${jsRes}`);
       if (String(jsRes).startsWith('clicked')) {
-        charity = { text: String(jsRes).replace('clicked:',''), index: 0, optionsCount: 1, options: [String(jsRes)] };
+        charity = { text: String(jsRes).replace('clicked:', ''), index: 0, optionsCount: 1, options: [String(jsRes)] };
       }
     } catch (e) {
       logWarn(`JS charity fallback failed: ${e.message}`);
@@ -856,7 +838,7 @@ async function fillPartners(report) {
   try {
     fillFirstAvailable(
       [
-        `locator('input[name="charitySetup.charitySubtitle"]')`, 
+        `locator('input[name="charitySetup.charitySubtitle"]')`,
         `locator('textarea[name="charitySetup.charitySubtitle"]')`,
         `locator('input[placeholder="Fighting childhood cancer, one child at a time."]').first()`,
         `locator('input[placeholder*="Fighting childhood" i]').first()`,
@@ -1090,11 +1072,7 @@ function fillInputRobust(targets, value, label) {
   } catch (e) {
     logWarn(`JS fill fallback failed for ${label}: ${e.message}`);
   }
-<<<<<<< HEAD
-  throw new Error(`Could not fill ${label}. Tried: ${targets.join(' | ')}`);
-=======
   throw new Error(`Could not fill ${label}. Tried: ${safeJoin(targets, ' | ')}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
 }
 
 /** Promotion Tab modal: plain title input + plain <textarea> description (not rich text) + raw-HTML switch. */
@@ -1184,17 +1162,10 @@ async function addPromotionTab({ title, description, report, index }) {
   }
 
   const typed = readValues({ title: `${MODAL} input[placeholder="Enter promotion title"]` });
-<<<<<<< HEAD
   if (!String(typed.title || '').includes(title.slice(0, 10))) {
     // try alternative selector
     const alt = parseJson(evalPage(`() => JSON.stringify({ v: (document.querySelector('[data-qa-modal="1"] input')||{}).value || '' })`), {});
     if (!String(alt.v || '').includes(title.slice(0, 10))) {
-=======
-  if (!String(typed.title || '').includes(title.slice(0,10))) {
-    // try alternative selector
-    const alt = parseJson(evalPage(`() => JSON.stringify({ v: (document.querySelector('[data-qa-modal="1"] input')||{}).value || '' })`), {});
-    if (!String(alt.v || '').includes(title.slice(0,10))) {
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
       logWarn(`Promotion title may not have stuck: ${JSON.stringify(typed.title)} vs ${JSON.stringify(alt.v)}`);
     }
   }
@@ -1205,21 +1176,12 @@ async function addPromotionTab({ title, description, report, index }) {
   const closed = await waitForText(title, 15000);
   if (!closed) {
     const errs = captureVisibleErrors();
-<<<<<<< HEAD
-    logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Trying to close modal via Esc`);
+    logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${safeJoin(errs, ' | ') || 'none'}. Trying to close modal via Esc`);
     try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) { }
   }
   const finalOk = await waitForText(title, 5000);
   if (!finalOk) {
-    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}. Body: ${bodyText().slice(0, 800)}`);
-=======
-    logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${safeJoin(errs, ' | ') || 'none'}. Trying to close modal via Esc`);
-    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
-  }
-  const finalOk = await waitForText(title, 5000);
-  if (!finalOk) {
-    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}. Body: ${bodyText().slice(0,800)}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
+    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}. Body: ${bodyText().slice(0, 800)}`);
   }
   logInfo(`promotion tab ${index} saved: ${title}`);
   if (report) {
@@ -1244,11 +1206,7 @@ async function addPrizeDetail(report) {
   ];
   for (const t of clickTargets) {
     const r = cli(['click', t], { allowFailure: true });
-<<<<<<< HEAD
     if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0, 100)}`); clicked = true; break; }
-=======
-    if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0,100)}`); clicked = true; break; }
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
   if (!clicked) {
     logWarn('Standard click targets failed, trying JS click');
@@ -1297,11 +1255,7 @@ async function addPrizeDetail(report) {
     modalMarked = true;
   } catch (e) {
     lastMarkError = e.message;
-<<<<<<< HEAD
     logWarn(`markModal first attempt failed: ${lastMarkError.slice(0, 500)}`);
-=======
-    logWarn(`markModal first attempt failed: ${lastMarkError.slice(0,500)}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     // try even more aggressive fallback
     await sleep(500);
     try {
@@ -1322,11 +1276,7 @@ async function addPrizeDetail(report) {
         buttons: [...document.querySelectorAll('button')].map(b=> (b.innerText||'').trim()).filter(t=>t).slice(0,20)
       });
     }`);
-<<<<<<< HEAD
     throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0, 2000)}`);
-=======
-    throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0,2000)}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
 
   // 3. Gather modal info with robust queries
@@ -1354,15 +1304,9 @@ async function addPrizeDetail(report) {
     });
   }`), {});
 
-<<<<<<< HEAD
   logInfo(`Prize modal info: ${JSON.stringify(info).slice(0, 1000)}`);
 
   if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll || []).some(h => /Prize|Price/i.test(h))) {
-=======
-  logInfo(`Prize modal info: ${JSON.stringify(info).slice(0,1000)}`);
-
-  if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll||[]).some(h=>/Prize|Price/i.test(h))) {
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     logWarn(`Unexpected prize modal heading: ${JSON.stringify(info.heading)} / ${JSON.stringify(info.headingAll)} - continuing anyway`);
   }
 
@@ -1379,11 +1323,7 @@ async function addPrizeDetail(report) {
   ];
   for (const tgt of emojiTargets) {
     const r = cli(['fill', tgt, String(data.prizeEmoji)], { allowFailure: true });
-<<<<<<< HEAD
     if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0, 80)}`); emojiFilled = true; break; }
-=======
-    if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0,80)}`); emojiFilled = true; break; }
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
   if (!emojiFilled) {
     logWarn('emoji fill via CLI failed, trying JS');
@@ -1410,11 +1350,7 @@ async function addPrizeDetail(report) {
     return JSON.stringify({ val: el ? el.value : null, ph: el ? el.placeholder : null });
   }`), {});
   logInfo(`emoji after fill check: ${JSON.stringify(emojiCheck)}`);
-<<<<<<< HEAD
   if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length === 0) {
-=======
-  if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length===0) {
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     logWarn(`emoji may not have persisted: ${JSON.stringify(emojiCheck.val)}, trying alternative emoji fallback '🎁' as plain text`);
     // try with simple ASCII fallback if emoji fails validation - but keep original
   }
@@ -1457,11 +1393,7 @@ async function addPrizeDetail(report) {
           const r = cli(['fill', `locator('${MODAL} ${css}')`, String(data.prizeDescription)], { allowFailure: true });
           if (r.code === 0) { descFilled = true; logInfo(`rich text filled via placeholder ${ph}`); break; }
         }
-<<<<<<< HEAD
       } catch (_) { }
-=======
-      } catch (_) {}
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     }
     if (!descFilled) {
       try {
@@ -1477,11 +1409,7 @@ async function addPrizeDetail(report) {
           document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, ${JSON.stringify(data.prizeDescription)});
           // also try innerText
-<<<<<<< HEAD
           if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0, 10))})) {
-=======
-          if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,10))})) {
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
             el.innerText=${JSON.stringify(data.prizeDescription)};
             el.dispatchEvent(new Event('input',{bubbles:true}));
           }
@@ -1501,11 +1429,7 @@ async function addPrizeDetail(report) {
 
   // 6. Capture errors before save
   const preSaveErrors = captureVisibleErrors();
-<<<<<<< HEAD
-  if (preSaveErrors.length) logWarn(`Pre-save visible errors: ${preSaveErrors.join(' | ')}`);
-=======
   if (preSaveErrors.length) logWarn(`Pre-save visible errors: ${safeJoin(preSaveErrors, ' | ')}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
 
   // 7. Click save with robust handling
   let saveClicked = false;
@@ -1527,37 +1451,23 @@ async function addPrizeDetail(report) {
     }`);
     logInfo(`JS save click: ${jsClick}`);
     if (String(jsClick).startsWith('clicked')) saveClicked = true;
-<<<<<<< HEAD
-    else throw new Error(`Save button click failed: ${jsClick} | pre-errors: ${preSaveErrors.join(' | ')}`);
-=======
     else throw new Error(`Save button click failed: ${jsClick} | pre-errors: ${safeJoin(preSaveErrors, ' | ')}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
 
   await sleep(1200);
 
   // 8. Verify modal closed and prize saved
   // Check if modal still open
-<<<<<<< HEAD
   const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0, 15))}) })`), {});
-=======
-  const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,15))}) })`), {});
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   logInfo(`Post-save modal check: ${JSON.stringify(modalStillOpen)}`);
 
   if (modalStillOpen.open || modalStillOpen.dialog) {
     logWarn('Modal still appears open after save, checking for validation errors');
     const errs = captureVisibleErrors();
     if (errs.length) {
-<<<<<<< HEAD
-      logWarn(`Validation errors after save attempt: ${errs.join(' | ')}`);
-      // Try to close via Esc and retry with different emoji if needed
-      if (errs.join(' ').toLowerCase().includes('emoji') || errs.join(' ').toLowerCase().includes('required')) {
-=======
       logWarn(`Validation errors after save attempt: ${safeJoin(errs, ' | ')}`);
       // Try to close via Esc and retry with different emoji if needed
       if (safeJoin(errs, ' ').toLowerCase().includes('emoji') || safeJoin(errs, ' ').toLowerCase().includes('required')) {
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
         logWarn('Emoji validation error suspected, trying alternative emoji "🎉"');
         try {
           const altEmoji = '🎉';
@@ -1568,11 +1478,7 @@ async function addPrizeDetail(report) {
           await sleep(400);
           clickModalSave(saveLabels);
           await sleep(1200);
-<<<<<<< HEAD
         } catch (_) { }
-=======
-        } catch (_) {}
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
       }
     }
   }
@@ -1580,32 +1486,18 @@ async function addPrizeDetail(report) {
   // Final verification - prize description should appear on page
   const saved = await waitForText(data.prizeDescription, 15000);
   if (!saved) {
-<<<<<<< HEAD
     const body = bodyText().slice(0, 2000);
     const errs = captureVisibleErrors();
     // try to dismiss modal and check again
     try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) { }
     const saved2 = await waitForText(data.prizeDescription, 5000);
     if (!saved2) {
-      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0, 800)}`);
-=======
-    const body = bodyText().slice(0,2000);
-    const errs = captureVisibleErrors();
-    // try to dismiss modal and check again
-    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
-    const saved2 = await waitForText(data.prizeDescription, 5000);
-    if (!saved2) {
-      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${safeJoin(errs, ' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0,800)}`);
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
+      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${safeJoin(errs, ' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0, 800)}`);
     }
   }
 
   // Clean up modal marker
-<<<<<<< HEAD
   try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) { }
-=======
-  try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) {}
->>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
 
   if (report) {
     report.prizeDetail = { emoji: data.prizeEmoji, description: data.prizeDescription, modalHeading: info.heading || info.headingAll?.[0] || '', emojiMaxLength: info.emojiMaxLength, modalInfo: info };
