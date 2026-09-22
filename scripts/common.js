@@ -173,21 +173,20 @@ function listFileInputs() {
 
 function dropFiles(target, absPaths) {
   try {
-    // Verify files exist
     for (const p of absPaths) {
       if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
     }
     return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
   } catch (e) {
-    // Try with allowFailure to get more info
     try {
       const res = cli(['drop', target, ...absPaths.map(p => `--path=${p}`)], { allowFailure: true });
       if (res.code !== 0) {
-        throw new Error(`drop failed: ${res.stderr.slice(0, 300) || res.stdout.slice(0, 300)}`);
+        const fullErr = `STDERR: ${res.stderr}\nSTDOUT: ${res.stdout}`;
+        throw new Error(`drop failed for target ${target}: ${fullErr.slice(0, 1000)}`);
       }
       return res;
     } catch (e2) {
-      throw e2;
+      throw new Error(`dropFiles ${target} error: ${e2.message.slice(0, 1000)} | original: ${e.message.slice(0, 500)}`);
     }
   }
 }
@@ -202,11 +201,11 @@ function uploadFiles(absPaths) {
     try {
       const res = cli(['upload', ...absPaths], { allowFailure: true });
       if (res.code !== 0) {
-        throw new Error(`upload failed: ${res.stderr.slice(0, 300) || res.stdout.slice(0, 300)}`);
+        throw new Error(`upload failed: STDERR=${res.stderr.slice(0, 800)} STDOUT=${res.stdout.slice(0, 800)}`);
       }
       return res;
     } catch (e2) {
-      throw e2;
+      throw new Error(`uploadFiles error: ${e2.message.slice(0, 1000)}`);
     }
   }
 }
