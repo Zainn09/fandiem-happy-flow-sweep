@@ -54,12 +54,6 @@ async function ensurePlaywrightAttached() {
     } catch (e) {
       logWarn(`Failed to spawn attach.js: ${e.message}`);
     }
-<<<<<<< HEAD
-    // Best-effort: also try to open a new blank tab which can trigger extension UI to re-appear
-    try {
-      cli(['tab-new', 'about:blank'], { allowFailure: true });
-    } catch (_) {}
-=======
 
     // --- FIX: open the actual extension permission pages ---
     const EXT_ID = 'mmlmfjhmonkocbjadbfplnigmagldckm';
@@ -76,7 +70,7 @@ async function ensurePlaywrightAttached() {
           logInfo(`Opened permission page via tab-new: ${u}`);
           break;
         }
-      } catch (_) {}
+      } catch (_) { }
     }
 
     // 2) Most reliable when NOT attached: spawn Chrome directly with extension URL in the right profile
@@ -92,9 +86,9 @@ async function ensurePlaywrightAttached() {
           encoding: 'utf8',
           windowsHide: true
         });
-        const m = String(profRes.stdout||'').match(/^Profile directory:\s*(.+)$/m);
+        const m = String(profRes.stdout || '').match(/^Profile directory:\s*(.+)$/m);
         if (m) profileDir = m[1].trim();
-      } catch (_) {}
+      } catch (_) { }
       const chromePath = config.chromeExecutablePath || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
       if (profileDir && fs.existsSync(chromePath)) {
         for (const u of connectUrls) {
@@ -113,12 +107,11 @@ async function ensurePlaywrightAttached() {
           }
         }
       } else {
-        logWarn(`Could not spawn Chrome directly (profileDir=${profileDir||'unknown'} chromeExists=${fs.existsSync(chromePath)})`);
+        logWarn(`Could not spawn Chrome directly (profileDir=${profileDir || 'unknown'} chromeExists=${fs.existsSync(chromePath)})`);
       }
     } catch (e) {
       logWarn(`Direct Chrome open failed: ${e.message}`);
     }
->>>>>>> 0ec639d2a6b4356a642919c398392ace8453cdec
   }
 
   launchAttach('Initial attach attempt...');
@@ -162,7 +155,7 @@ function previewTitle() {
   const now = new Date();
   const yyyymmdd = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}`;
   let n = 0;
-  try { n = Number(JSON.parse(fs.readFileSync(path.join(resultsDir, `run-counter-${yyyymmdd}.json`), 'utf8')).count || 0); } catch (_) {}
+  try { n = Number(JSON.parse(fs.readFileSync(path.join(resultsDir, `run-counter-${yyyymmdd}.json`), 'utf8')).count || 0); } catch (_) { }
   return `${config.sweepTitlePrefix}-${yyyymmdd}-${String(n + 1).padStart(3, '0')} (preview)`;
 }
 const sweepTitle = isDryRun ? previewTitle() : buildSweepTitle();
@@ -251,7 +244,7 @@ async function clickContinueAndExpect(expectedHeading) {
     else lastErr = r.stderr || r.stdout;
   }
   if (!clicked) {
-    logWarn(`Standard CONTINUE click failed (${lastErr.slice(0,200)}), trying JS click`);
+    logWarn(`Standard CONTINUE click failed (${lastErr.slice(0, 200)}), trying JS click`);
     const jsRes = runCode(`async page => {
       const btns=[...document.querySelectorAll('button')].filter(b=>/CONTINUE|Continue/.test(b.innerText||''));
       const grad=btns.find(b=> (b.getAttribute('data-variant')==='gradient') || /gradient/.test(b.className||''));
@@ -277,13 +270,13 @@ async function clickContinueAndExpect(expectedHeading) {
       await sleep(1000);
       runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }`);
       await sleep(1500);
-    } catch (_) {}
+    } catch (_) { }
     errors = captureVisibleErrors();
     ok = await waitForText(expectedHeading, 15000);
   }
   if (!ok) {
-    const bodySnippet = bodyText().slice(0,1500);
-    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${errors.join(' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0,800)}`);
+    const bodySnippet = bodyText().slice(0, 1500);
+    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${errors.join(' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0, 800)}`);
   }
   if (errors.length) logWarn(`visible errors after CONTINUE (reached ${expectedHeading} anyway): ${errors.join(' | ')}`);
   return { clicked, errors };
@@ -874,10 +867,10 @@ async function addPromotionTab({ title, description, report, index }) {
   }
 
   const typed = readValues({ title: `${MODAL} input[placeholder="Enter promotion title"]` });
-  if (!String(typed.title || '').includes(title.slice(0,10))) {
+  if (!String(typed.title || '').includes(title.slice(0, 10))) {
     // try alternative selector
     const alt = parseJson(evalPage(`() => JSON.stringify({ v: (document.querySelector('[data-qa-modal="1"] input')||{}).value || '' })`), {});
-    if (!String(alt.v || '').includes(title.slice(0,10))) {
+    if (!String(alt.v || '').includes(title.slice(0, 10))) {
       logWarn(`Promotion title may not have stuck: ${JSON.stringify(typed.title)} vs ${JSON.stringify(alt.v)}`);
     }
   }
@@ -889,11 +882,11 @@ async function addPromotionTab({ title, description, report, index }) {
   if (!closed) {
     const errs = captureVisibleErrors();
     logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Trying to close modal via Esc`);
-    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
+    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) { }
   }
   const finalOk = await waitForText(title, 5000);
   if (!finalOk) {
-    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}. Body: ${bodyText().slice(0,800)}`);
+    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}. Body: ${bodyText().slice(0, 800)}`);
   }
   logInfo(`promotion tab ${index} saved: ${title}`);
   if (report) {
@@ -918,7 +911,7 @@ async function addPrizeDetail(report) {
   ];
   for (const t of clickTargets) {
     const r = cli(['click', t], { allowFailure: true });
-    if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0,100)}`); clicked = true; break; }
+    if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0, 100)}`); clicked = true; break; }
   }
   if (!clicked) {
     logWarn('Standard click targets failed, trying JS click');
@@ -967,7 +960,7 @@ async function addPrizeDetail(report) {
     modalMarked = true;
   } catch (e) {
     lastMarkError = e.message;
-    logWarn(`markModal first attempt failed: ${lastMarkError.slice(0,500)}`);
+    logWarn(`markModal first attempt failed: ${lastMarkError.slice(0, 500)}`);
     // try even more aggressive fallback
     await sleep(500);
     try {
@@ -988,7 +981,7 @@ async function addPrizeDetail(report) {
         buttons: [...document.querySelectorAll('button')].map(b=> (b.innerText||'').trim()).filter(t=>t).slice(0,20)
       });
     }`);
-    throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0,2000)}`);
+    throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0, 2000)}`);
   }
 
   // 3. Gather modal info with robust queries
@@ -1016,9 +1009,9 @@ async function addPrizeDetail(report) {
     });
   }`), {});
 
-  logInfo(`Prize modal info: ${JSON.stringify(info).slice(0,1000)}`);
+  logInfo(`Prize modal info: ${JSON.stringify(info).slice(0, 1000)}`);
 
-  if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll||[]).some(h=>/Prize|Price/i.test(h))) {
+  if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll || []).some(h => /Prize|Price/i.test(h))) {
     logWarn(`Unexpected prize modal heading: ${JSON.stringify(info.heading)} / ${JSON.stringify(info.headingAll)} - continuing anyway`);
   }
 
@@ -1035,7 +1028,7 @@ async function addPrizeDetail(report) {
   ];
   for (const tgt of emojiTargets) {
     const r = cli(['fill', tgt, String(data.prizeEmoji)], { allowFailure: true });
-    if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0,80)}`); emojiFilled = true; break; }
+    if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0, 80)}`); emojiFilled = true; break; }
   }
   if (!emojiFilled) {
     logWarn('emoji fill via CLI failed, trying JS');
@@ -1062,7 +1055,7 @@ async function addPrizeDetail(report) {
     return JSON.stringify({ val: el ? el.value : null, ph: el ? el.placeholder : null });
   }`), {});
   logInfo(`emoji after fill check: ${JSON.stringify(emojiCheck)}`);
-  if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length===0) {
+  if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length === 0) {
     logWarn(`emoji may not have persisted: ${JSON.stringify(emojiCheck.val)}, trying alternative emoji fallback '🎁' as plain text`);
     // try with simple ASCII fallback if emoji fails validation - but keep original
   }
@@ -1105,7 +1098,7 @@ async function addPrizeDetail(report) {
           const r = cli(['fill', `locator('${MODAL} ${css}')`, String(data.prizeDescription)], { allowFailure: true });
           if (r.code === 0) { descFilled = true; logInfo(`rich text filled via placeholder ${ph}`); break; }
         }
-      } catch (_) {}
+      } catch (_) { }
     }
     if (!descFilled) {
       try {
@@ -1121,7 +1114,7 @@ async function addPrizeDetail(report) {
           document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, ${JSON.stringify(data.prizeDescription)});
           // also try innerText
-          if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,10))})) {
+          if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0, 10))})) {
             el.innerText=${JSON.stringify(data.prizeDescription)};
             el.dispatchEvent(new Event('input',{bubbles:true}));
           }
@@ -1170,7 +1163,7 @@ async function addPrizeDetail(report) {
 
   // 8. Verify modal closed and prize saved
   // Check if modal still open
-  const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,15))}) })`), {});
+  const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0, 15))}) })`), {});
   logInfo(`Post-save modal check: ${JSON.stringify(modalStillOpen)}`);
 
   if (modalStillOpen.open || modalStillOpen.dialog) {
@@ -1190,7 +1183,7 @@ async function addPrizeDetail(report) {
           await sleep(400);
           clickModalSave(saveLabels);
           await sleep(1200);
-        } catch (_) {}
+        } catch (_) { }
       }
     }
   }
@@ -1198,18 +1191,18 @@ async function addPrizeDetail(report) {
   // Final verification - prize description should appear on page
   const saved = await waitForText(data.prizeDescription, 15000);
   if (!saved) {
-    const body = bodyText().slice(0,2000);
+    const body = bodyText().slice(0, 2000);
     const errs = captureVisibleErrors();
     // try to dismiss modal and check again
-    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
+    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) { }
     const saved2 = await waitForText(data.prizeDescription, 5000);
     if (!saved2) {
-      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0,800)}`);
+      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0, 800)}`);
     }
   }
 
   // Clean up modal marker
-  try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) {}
+  try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) { }
 
   if (report) {
     report.prizeDetail = { emoji: data.prizeEmoji, description: data.prizeDescription, modalHeading: info.heading || info.headingAll?.[0] || '', emojiMaxLength: info.emojiMaxLength, modalInfo: info };
