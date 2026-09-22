@@ -289,7 +289,8 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
   // 2) setInputFiles on nth hidden input
   if (inputNth !== null && inputNth !== undefined) {
     try {
-      const inputs = listFileInputs();
+      let inputs = listFileInputs();
+      if (!Array.isArray(inputs)) inputs = [];
       const idx = inputNth === -1 ? inputs.length - 1 : inputNth;
       logInfo(`${label}: strategy=setInputFiles nth=${idx} (inputs=${inputs.length}) files=${names}`);
       if (idx < 0) throw new Error(`no file inputs on page (found ${inputs.length})`);
@@ -376,8 +377,12 @@ async function fillCampaignInfo(report) {
   assertContains(bodyText(), sweepTitle.slice(0, 20), 'Title echo');
 
   // Diagnose file inputs (cover + gallery share the accept list)
-  const inputs = listFileInputs();
-  logInfo(`file inputs on Campaign Info: ${JSON.stringify(inputs.map(i => ({ i: i.index, accept: i.accept.slice(0, 60), multiple: i.multiple })))}`);
+  let inputs = listFileInputs();
+  if (!Array.isArray(inputs)) {
+    logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0,200)}, coercing to []`);
+    inputs = [];
+  }
+  logInfo(`file inputs on Campaign Info: ${JSON.stringify(inputs.map(i => ({ i: i.index, accept: (i.accept||'').slice(0, 60), multiple: i.multiple })))}`);
   report.media = report.media || {};
   report.media.fileInputs = inputs;
 
@@ -409,7 +414,8 @@ async function fillCampaignInfo(report) {
     click: `locator('button[type="button"]:has-text("Add media")')`
   };
   for (const file of galleryMedia) {
-    const inputsNow = listFileInputs();
+    let inputsNow = listFileInputs();
+    if (!Array.isArray(inputsNow)) inputsNow = [];
     const res = await attemptUpload({
       dropTarget: galleryTargets.drop,
       clickTarget: galleryTargets.click,
@@ -426,7 +432,8 @@ async function fillCampaignInfo(report) {
   for (const file of typeCoverageMedia) {
     const name = path.basename(file);
     try {
-      const inputsNow = listFileInputs();
+      let inputsNow = listFileInputs();
+    if (!Array.isArray(inputsNow)) inputsNow = [];
       const res = await attemptUpload({
         dropTarget: galleryTargets.drop,
         clickTarget: galleryTargets.click,
@@ -1229,7 +1236,8 @@ async function addBonus(report) {
     logWarn('bonus modal has no entry-tier dropdown-menu-trigger (skipping link step)');
   }
 
-  const inputs = listFileInputs();
+  let inputs = listFileInputs();
+  if (!Array.isArray(inputs)) inputs = [];
   const bonusUploadProbe = () => {
     const res = parseJson(evalPage(`() => JSON.stringify({
       files: [...document.querySelectorAll('${MODAL} input[type="file"]')].reduce((n, i) => n + (i.files ? i.files.length : 0), 0),

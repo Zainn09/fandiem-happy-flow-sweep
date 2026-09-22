@@ -125,16 +125,29 @@ function buildSweepTitle() {
 
 // ---- uploads: 3 strategies ----
 function listFileInputs() {
-  const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('input[type="file"]')].map((el, i) => ({
-    index: i,
-    accept: el.getAttribute('accept') || '',
-    name: el.getAttribute('name') || '',
-    id: el.id || '',
-    multiple: !!el.multiple,
-    visible: (() => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()
-  })))`);
-  try { return JSON.parse(raw || '[]'); } catch (_) { return []; }
+  try {
+    const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('input[type="file"]')].map((el, i) => ({
+      index: i,
+      accept: el.getAttribute('accept') || '',
+      name: el.getAttribute('name') || '',
+      id: el.id || '',
+      multiple: !!el.multiple,
+      visible: (() => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()
+    })))`);
+    const parsed = JSON.parse(raw || '[]');
+    // Ensure always array - fix for inputs.map is not a function
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') {
+      const vals = Object.values(parsed);
+      if (vals.length && typeof vals[0] === 'object') return vals;
+    }
+    return [];
+  } catch (e) {
+    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch(_) {}
+    return [];
+  }
 }
+
 
 function dropFiles(target, absPaths) {
   return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
