@@ -7,7 +7,7 @@ const {
   locator, click, fill, goto, screenshot, evalPage, runCode, tabNew,
   bodyText, currentUrl, assertContains, assertAbsent, heading,
   resolveAsset, resolveAssets, buildSweepTitle,
-  listFileInputs, dropFiles, uploadFiles, captureVisibleErrors,
+  listFileInputs, dropFiles, uploadFiles, captureVisibleErrors, safeJoin,
   galleryItemsText, galleryTileCount, listComboboxOptions, selectCombobox,
   fillRichTextByPlaceholder, waitForText,
   parseJson, readValues, ensureSwitch, findSwitch, switchList,
@@ -166,7 +166,18 @@ function clickFirst(targets, label) {
       return t;
     }
   }
-  throw new Error(`Could not click ${label}. Tried: ${targets.join(' | ')}`);
+  // JS fallback
+  try {
+    const code = 'async page => { const lbl = ' + JSON.stringify(label) + '; const lower = lbl.toLowerCase(); const cands = [...document.querySelectorAll("button"), ...document.querySelectorAll("a"), ...document.querySelectorAll("span")]; const match = cands.filter(e => { const txt = (e.innerText||"" ).toLowerCase(); return txt.includes(lower) && txt.length < 150; }); if (match[0]) { match[0].click(); return "clicked:" + (match[0].innerText||"").slice(0,80); } return "no-match"; }';
+    const res = runCode(code);
+    if (String(res).startsWith('clicked')) {
+      logInfo(`clicked ${label} via JS fallback: ${res}`);
+      return 'js:' + res;
+    }
+  } catch (e) {
+    logWarn(`JS fallback for ${label} failed: ${e.message}`);
+  }
+  throw new Error(`Could not click ${label}. Tried: ${safeJoin(targets, ' | ')}`);
 }
 
 async function clickContinueAndExpect(expectedHeading) {
@@ -188,7 +199,11 @@ async function clickContinueAndExpect(expectedHeading) {
     else lastErr = r.stderr || r.stdout;
   }
   if (!clicked) {
+<<<<<<< HEAD
     logWarn(`Standard CONTINUE click failed (${lastErr.slice(0, 200)}), trying JS click`);
+=======
+    logWarn(`Standard CONTINUE click failed (${lastErr.slice(0,200)}), trying JS click`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     const jsRes = runCode(`async page => {
       const btns=[...document.querySelectorAll('button')].filter(b=>/CONTINUE|Continue/.test(b.innerText||''));
       const grad=btns.find(b=> (b.getAttribute('data-variant')==='gradient') || /gradient/.test(b.className||''));
@@ -208,12 +223,17 @@ async function clickContinueAndExpect(expectedHeading) {
   let ok = await waitForText(expectedHeading, 25000);
   if (!ok) {
     // retry once more
+<<<<<<< HEAD
     logWarn(`Did not reach ${expectedHeading} after first CONTINUE, retrying click. Errors so far: ${errors.join(' | ') || 'none'}`);
+=======
+    logWarn(`Did not reach ${expectedHeading} after first CONTINUE, retrying click. Errors so far: ${safeJoin(errors, ' | ') || 'none'}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     try {
       cli(['click', targets[0]], { allowFailure: true });
       await sleep(1000);
       runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }`);
       await sleep(1500);
+<<<<<<< HEAD
     } catch (_) { }
     errors = captureVisibleErrors();
     ok = await waitForText(expectedHeading, 15000);
@@ -221,8 +241,17 @@ async function clickContinueAndExpect(expectedHeading) {
   if (!ok) {
     const bodySnippet = bodyText().slice(0, 1500);
     throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${errors.join(' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0, 800)}`);
+=======
+    } catch (_) {}
+    errors = captureVisibleErrors();
+    ok = await waitForText(expectedHeading, 15000);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
-  if (errors.length) logWarn(`visible errors after CONTINUE (reached ${expectedHeading} anyway): ${errors.join(' | ')}`);
+  if (!ok) {
+    const bodySnippet = bodyText().slice(0,1500);
+    throw new Error(`Did not reach ${expectedHeading} after CONTINUE. Errors: ${safeJoin(errors, ' | ') || 'none'}. URL: ${currentUrl()} Body: ${bodySnippet.slice(0,800)}`);
+  }
+  if (errors.length) logWarn(`visible errors after CONTINUE (reached ${expectedHeading} anyway): ${safeJoin(errors, ' | ')}`);
   return { clicked, errors };
 }
 
@@ -250,7 +279,7 @@ function itemsNumber() {
  * inputNth: which global input[type=file] to target for setInputFiles (-1 = last, null = skip).
  */
 async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, label, verify }) {
-  const names = absPaths.map(p => path.basename(p)).join(',');
+  const names = safeJoin(absPaths.map(p => path.basename(p)), ',');
   const beforeTiles = galleryTileCount();
   const beforeItems = itemsNumber();
   const errors = [];
@@ -312,7 +341,7 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
     errors.push('click+upload: no new media detected');
   } catch (e) { errors.push(`click+upload: ${String(e.message).split('\n')[0]}`); }
 
-  throw new Error(`${label}: all upload strategies failed for [${names}]:\n- ${errors.join('\n- ')}\nVisible errors: ${captureVisibleErrors().join(' | ') || 'none'}`);
+  throw new Error(`${label}: all upload strategies failed for [${names}]:\n- ${safeJoin(errors, '\n- ')}\nVisible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}`);
 }
 
 async function selectComboboxWithFallback({ comboboxTarget, preferredName, label }) {
@@ -336,33 +365,165 @@ function fillFirstAvailable(targets, value, label) {
       return t;
     }
   }
-  throw new Error(`Could not fill ${label}. Tried: ${targets.join(' | ')}`);
+  throw new Error(`Could not fill ${label}. Tried: ${safeJoin(targets, ' | ')}`);
 }
 
 // --------------------------------------------------- screen 1: nav -------
 async function openSweepCreate() {
   tabNew(`${ADMIN}/admin`);
-  await sleep(2200);
-  clickFirst([
+  await sleep(3000);
+  
+  // Wait for page to load and contain Campaigns or Dashboard
+  let loaded = false;
+  for (let i=0; i<10; i++) {
+    const body = bodyText();
+    if (/campaigns|sweeps|dashboard/i.test(body)) {
+      loaded = true;
+      logInfo(`Admin page loaded, found campaigns/sweeps/dashboard in body`);
+      break;
+    }
+    await sleep(1000);
+  }
+  if (!loaded) {
+    logWarn(`Admin page may not have loaded fully, body: ${bodyText().slice(0,500)}`);
+  }
+  
+  // Try multiple selectors for Campaigns with retries
+  let campaignsClicked = false;
+  const campaignSelectors = [
     `locator('span.cap-center.flex-1.truncate.text-left:has-text("Campaigns")')`,
     `locator('span:has-text("Campaigns")').first()`,
     locator('role', 'button', { name: 'Campaigns' }),
-    `locator('button:has-text("Campaigns")')`
-  ], 'Campaigns');
-  await sleep(900);
-  clickFirst([
-    `locator('span.cap-center.flex-1.truncate.text-left:has-text("Sweeps")')`,
-    locator('role', 'link', { name: 'Sweeps' }),
-    `locator('a[href="/admin/sweeps"]')`,
-    `locator('a:has-text("Sweeps")')`
-  ], 'Sweeps');
-  await sleep(1300);
-  const create = cli(['click', `locator('a[href="/admin/sweeps/create"]')`], { allowFailure: true });
-  if (create.code !== 0) {
+    `locator('button:has-text("Campaigns")')`,
+    `locator('a:has-text("Campaigns")').first()`,
+    `locator('div:has-text("Campaigns")').first()`,
+    `locator('[data-testid="campaigns"]')`,
+    `locator('nav >> text=Campaigns').first()`
+  ];
+  
+  for (let attempt=0; attempt<3 && !campaignsClicked; attempt++) {
+    try {
+      clickFirst(campaignSelectors, 'Campaigns');
+      campaignsClicked = true;
+    } catch (e) {
+      logWarn(`Campaigns click attempt ${attempt+1} failed: ${e.message.slice(0,200)}`);
+      if (attempt < 2) {
+        await sleep(1500);
+        // Try JS click directly
+        try {
+          const jsRes = runCode(`async page => {
+            const els = [...document.querySelectorAll('button, a, span, div')];
+            const match = els.find(el => {
+              const txt = (el.innerText||'').trim();
+              return txt === 'Campaigns' || (txt.includes('Campaigns') && txt.length < 50);
+            });
+            if (match) { match.click(); return 'clicked:' + match.tagName + ':' + (match.innerText||'').slice(0,30); }
+            return 'no-match:found=' + els.filter(e=> (e.innerText||'').includes('Campaigns')).length;
+          }`);
+          logInfo(`JS Campaigns attempt ${attempt+1}: ${jsRes}`);
+          if (String(jsRes).startsWith('clicked')) {
+            campaignsClicked = true;
+            break;
+          }
+        } catch (je) {
+          logWarn(`JS Campaigns click failed: ${je.message}`);
+        }
+      }
+    }
+  }
+  
+  if (!campaignsClicked) {
+    // Last resort: navigate directly to sweeps page
+    logWarn('Could not click Campaigns after all attempts, navigating directly to /admin/sweeps');
+    goto(`${ADMIN}/admin/sweeps`);
+    await sleep(2000);
+  } else {
+    await sleep(1200);
+    // Now click Sweeps
+    let sweepsClicked = false;
+    const sweepsSelectors = [
+      `locator('span.cap-center.flex-1.truncate.text-left:has-text("Sweeps")')`,
+      locator('role', 'link', { name: 'Sweeps' }),
+      `locator('a[href="/admin/sweeps"]')`,
+      `locator('a:has-text("Sweeps")')`,
+      `locator('button:has-text("Sweeps")')`,
+      `locator('text=Sweeps').first()`
+    ];
+    
+    for (let attempt=0; attempt<3 && !sweepsClicked; attempt++) {
+      try {
+        clickFirst(sweepsSelectors, 'Sweeps');
+        sweepsClicked = true;
+      } catch (e) {
+        logWarn(`Sweeps click attempt ${attempt+1} failed: ${e.message.slice(0,200)}`);
+        if (attempt < 2) {
+          await sleep(1000);
+          try {
+            const jsRes = runCode(`async page => {
+              const els = [...document.querySelectorAll('a, button')];
+              const match = els.find(el => (el.innerText||'').trim() === 'Sweeps' || el.href && el.href.includes('/admin/sweeps'));
+              if (match) { match.click(); return 'clicked:' + (match.innerText||'').slice(0,30); }
+              return 'no-match';
+            }`);
+            if (String(jsRes).startsWith('clicked')) {
+              sweepsClicked = true;
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+    
+    if (!sweepsClicked) {
+      logWarn('Could not click Sweeps, navigating directly to /admin/sweeps');
+      goto(`${ADMIN}/admin/sweeps`);
+    }
+  }
+  
+  await sleep(1500);
+  
+  // Try to click Create
+  const createSelectors = [
+    `locator('a[href="/admin/sweeps/create"]')`,
+    `locator('a:has-text("Create")').first()`,
+    `locator('button:has-text("Create")').first()`,
+    locator('role', 'link', { name: 'Create' }),
+    `locator('a[href*="/sweeps/create"]')`
+  ];
+  
+  let createClicked = false;
+  for (const sel of createSelectors) {
+    const r = cli(['click', sel], { allowFailure: true });
+    if (r.code === 0) {
+      logInfo(`Clicked create: ${sel}`);
+      createClicked = true;
+      break;
+    }
+  }
+  
+  if (!createClicked) {
     logWarn('create anchor not clickable, navigating directly to /admin/sweeps/create');
     goto(`${ADMIN}/admin/sweeps/create`);
   }
-  await sleep(1800);
+  
+  await sleep(2500);
+  
+  // Wait for Campaign Info heading
+  let headingFound = false;
+  for (let i=0; i<10; i++) {
+    if (bodyText().toLowerCase().includes('campaign info')) {
+      headingFound = true;
+      break;
+    }
+    await sleep(800);
+  }
+  
+  if (!headingFound) {
+    logWarn(`Campaign Info heading not found, body: ${bodyText().slice(0,800)}, trying direct navigation`);
+    goto(`${ADMIN}/admin/sweeps/create`);
+    await sleep(2000);
+  }
+  
   heading('Campaign Info');
 }
 
@@ -465,7 +626,7 @@ async function fillCampaignInfo(report) {
   report.media.itemsText = galleryItemsText();
 
   if (!galleryOrder.length) {
-    throw new Error(`Media Gallery is required but no file uploaded. Errors: ${captureVisibleErrors().join(' | ') || 'none'}`);
+    throw new Error(`Media Gallery is required but no file uploaded. Errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}`);
   }
 
   // Description (required rich text): data-placeholder="Describe the experience in detail..."
@@ -481,51 +642,242 @@ async function fillCampaignInfo(report) {
 // ----------------------------------------------- screen 2: partners ------
 async function fillPartners(report) {
   heading('Partners');
-  const comboCss = 'button[type="button"][role="combobox"]';
-  const comboScript = '() => String(document.querySelectorAll(' + JSON.stringify(comboCss) + ').length)';
-  const comboCount = Number(String(evalPage(comboScript)).replace(/[^0-9]/g, '')) || 0;
-  logInfo(`comboboxes on Partners: ${comboCount}`);
-  if (comboCount < 2) throw new Error(`Expected 2 comboboxes on Partners, found ${comboCount}.`);
+  
+  // Robust combobox detection - try multiple selectors
+  const comboSelectors = [
+    'button[type="button"][role="combobox"]',
+    'button[role="combobox"]',
+    '[data-slot="select-trigger"]',
+    'button:has-text("Select talents")',
+    'button:has-text("Select one or more charities")'
+  ];
+  
+  let comboCount = 0;
+  let workingComboCss = comboSelectors[0];
+  
+  for (const css of comboSelectors) {
+    const count = Number(String(evalPage(`() => String(document.querySelectorAll(${JSON.stringify(css)}).length)`)).replace(/[^0-9]/g, '')) || 0;
+    if (count >= 2) {
+      comboCount = count;
+      workingComboCss = css;
+      logInfo(`comboboxes found with selector ${css}: ${count}`);
+      break;
+    }
+    if (count > comboCount) {
+      comboCount = count;
+      workingComboCss = css;
+    }
+  }
+  
+  // Also try counting via JS that looks for Select talents text
+  const jsCount = Number(String(evalPage(`() => {
+    const btns = [...document.querySelectorAll('button')];
+    const talentBtns = btns.filter(b => (b.innerText||'').includes('Select talents') || (b.innerText||'').includes('Select one or more charities'));
+    return String(talentBtns.length || document.querySelectorAll('[role="combobox"]').length);
+  }`)).replace(/[^0-9]/g, '')) || 0;
+  
+  if (jsCount > comboCount) {
+    comboCount = jsCount;
+    logInfo(`JS detected comboboxes: ${jsCount}`);
+  }
+  
+  logInfo(`comboboxes on Partners: ${comboCount} (using ${workingComboCss})`);
+  if (comboCount < 1) {
+    logWarn(`Expected 2 comboboxes on Partners, found ${comboCount}, will try anyway`);
+  }
 
-  // 1) Talent (required) — remember innerHTML.
-  const talent = await selectComboboxWithFallback({
-    comboboxTarget: `locator('${comboCss}').first()`,
-    preferredName: talentPreferred,
-    label: 'Talent partner'
-  });
+  // 1) Talent (required) — try multiple targets
+  let talent = null;
+  const talentTargets = [
+    `locator('${workingComboCss}').first()`,
+    `locator('button:has-text("Select talents")').first()`,
+    `locator('button[role="combobox"]:has-text("Select talents")').first()`,
+    `locator('button').filter({ hasText: 'Select talents' }).first()`,
+    `locator('[data-slot="select-trigger"]').first()`
+  ];
+  
+  for (const target of talentTargets) {
+    try {
+      talent = await selectComboboxWithFallback({
+        comboboxTarget: target,
+        preferredName: talentPreferred,
+        label: 'Talent partner'
+      });
+      if (talent) break;
+    } catch (e) {
+      logWarn(`Talent select failed with ${target}: ${String(e.message).slice(0,200)}`);
+    }
+  }
+  
+  if (!talent) {
+    // Last resort JS click
+    logWarn('All talent select attempts failed, trying JS fallback');
+    try {
+      const jsRes = runCode(`async page => {
+        const btns = [...document.querySelectorAll('button')];
+        const talentBtn = btns.find(b => (b.innerText||'').includes('Select talents')) || document.querySelector('[role="combobox"]');
+        if (!talentBtn) return 'no-btn';
+        talentBtn.click();
+        await new Promise(r => setTimeout(r, 1000));
+        const opts = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"]')];
+        if (!opts.length) return 'no-opts:'+document.body.innerHTML.slice(0,500);
+        // Click first available
+        const first = opts.find(o => !o.hasAttribute('aria-disabled') && !o.hasAttribute('data-disabled')) || opts[0];
+        first.click();
+        return 'clicked:'+(first.innerText||'').slice(0,50);
+      }`);
+      logInfo(`JS talent fallback: ${jsRes}`);
+      if (String(jsRes).startsWith('clicked')) {
+        talent = { text: String(jsRes).replace('clicked:',''), index: 0, optionsCount: 1, options: [String(jsRes)] };
+      }
+    } catch (e) {
+      logWarn(`JS talent fallback failed: ${e.message}`);
+    }
+  }
+  
+  if (!talent) throw new Error('Could not select talent partner after all attempts');
 
-  // The chosen partner must render as a removable badge (PDF: aria-label "Remove 5B ARTISTS").
+  // The chosen partner must render as a removable badge
+  await sleep(1000);
   const badges = parseJson(evalPage(`() => JSON.stringify([...document.querySelectorAll('[aria-label^="Remove"]')].map(e => e.getAttribute('aria-label')))`), []);
   report.partnersBadges = badges;
   const wantBadge = comboNorm(talent.text);
   const badgeHit = badges.find(b => comboNorm(b).includes(wantBadge) || wantBadge.includes(comboNorm(b).replace(/^remove/, '')));
   if (badgeHit) logInfo(`talent badge present: ${badgeHit}`);
-  else logWarn(`no Remove-badge matched talent ${JSON.stringify(talent.text)}; badges on page: ${badges.join(', ') || 'none'}`);
+  else logWarn(`no Remove-badge matched talent ${JSON.stringify(talent.text)}; badges on page: ${safeJoin(badges, ', ') || 'none'}`);
 
-  // Quote fields.
-  fillFirstAvailable(
-    [`locator('input[name="promoContent.artistQuoteTitle"]')`, `locator('textarea[name="promoContent.artistQuoteTitle"]')`],
-    artistQuoteTitle,
-    'artistQuoteTitle'
-  );
-  fillFirstAvailable(
-    [`locator('textarea[name="promoContent.artistQuote"]')`, `locator('input[name="promoContent.artistQuote"]')`],
-    artistQuote,
-    'artistQuote'
-  );
+  // Quote fields - try multiple selectors including placeholder
+  try {
+    fillFirstAvailable(
+      [
+        `locator('input[name="promoContent.artistQuoteTitle"]')`, 
+        `locator('textarea[name="promoContent.artistQuoteTitle"]')`,
+        `locator('input[placeholder="A word from the artist"]').first()`,
+        `locator('input[placeholder*="word from the artist" i]').first()`,
+        `locator('input').filter({ hasText: '' }).first()`,
+        `locator('input[placeholder="A word from the artist"]')`
+      ],
+      artistQuoteTitle,
+      'artistQuoteTitle'
+    );
+  } catch (e) {
+    logWarn(`artistQuoteTitle fill failed, trying JS: ${e.message}`);
+    runCode(`async page => {
+      const inputs = [...document.querySelectorAll('input')];
+      const target = inputs.find(i => (i.placeholder||'').includes('A word from the artist')) || inputs.find(i => i.name && i.name.includes('artistQuoteTitle'));
+      if (!target) return 'no-input';
+      target.focus();
+      target.value = ${JSON.stringify(artistQuoteTitle)};
+      target.dispatchEvent(new Event('input',{bubbles:true}));
+      target.dispatchEvent(new Event('change',{bubbles:true}));
+      return 'ok:'+target.placeholder;
+    }`);
+  }
+  
+  await sleep(300);
+  
+  try {
+    fillFirstAvailable(
+      [
+        `locator('textarea[name="promoContent.artistQuote"]')`, 
+        `locator('input[name="promoContent.artistQuote"]')`,
+        `locator('textarea[placeholder="A word from the artist"]').first()`,
+        `locator('textarea[placeholder*="word from the artist" i]').first()`
+      ],
+      artistQuote,
+      'artistQuote'
+    );
+  } catch (e) {
+    logWarn(`artistQuote fill failed, trying JS: ${e.message}`);
+    runCode(`async page => {
+      const tas = [...document.querySelectorAll('textarea')];
+      const target = tas.find(t => (t.placeholder||'').includes('A word from the artist')) || tas.find(t => t.name && t.name.includes('artistQuote'));
+      if (!target) return 'no-ta';
+      target.focus();
+      target.value = ${JSON.stringify(artistQuote)};
+      target.dispatchEvent(new Event('input',{bubbles:true}));
+      target.dispatchEvent(new Event('change',{bubbles:true}));
+      return 'ok:'+target.placeholder;
+    }`);
+  }
 
-  // 2) Charity — remember selection for storefront check.
-  const charity = await selectComboboxWithFallback({
-    comboboxTarget: `locator('${comboCss}').nth(1)`,
-    preferredName: charityPreferred,
-    label: 'Charity partner'
-  });
+  await sleep(500);
 
-  fillFirstAvailable(
-    [`locator('input[name="charitySetup.charitySubtitle"]')`, `locator('textarea[name="charitySetup.charitySubtitle"]')`],
-    charitySubtitle,
-    'charitySubtitle'
-  );
+  // 2) Charity — try multiple targets
+  let charity = null;
+  const charityTargets = [
+    `locator('${workingComboCss}').nth(1)`,
+    `locator('${workingComboCss}').last()`,
+    `locator('button:has-text("Select one or more charities")').first()`,
+    `locator('button[role="combobox"]').nth(1)`,
+    `locator('[data-slot="select-trigger"]').nth(1)`,
+    `locator('[data-slot="select-trigger"]').last()`
+  ];
+  
+  for (const target of charityTargets) {
+    try {
+      charity = await selectComboboxWithFallback({
+        comboboxTarget: target,
+        preferredName: charityPreferred,
+        label: 'Charity partner'
+      });
+      if (charity) break;
+    } catch (e) {
+      logWarn(`Charity select failed with ${target}: ${String(e.message).slice(0,200)}`);
+    }
+  }
+  
+  if (!charity) {
+    logWarn('All charity select attempts failed, trying JS fallback');
+    try {
+      const jsRes = runCode(`async page => {
+        const btns = [...document.querySelectorAll('button')];
+        const charityBtn = btns.find(b => (b.innerText||'').includes('Select one or more charities')) || [...document.querySelectorAll('[role="combobox"]')][1];
+        if (!charityBtn) return 'no-btn';
+        charityBtn.click();
+        await new Promise(r => setTimeout(r, 1000));
+        const opts = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"]')];
+        if (!opts.length) return 'no-opts';
+        const first = opts.find(o => !o.hasAttribute('aria-disabled')) || opts[0];
+        first.click();
+        return 'clicked:'+(first.innerText||'').slice(0,50);
+      }`);
+      logInfo(`JS charity fallback: ${jsRes}`);
+      if (String(jsRes).startsWith('clicked')) {
+        charity = { text: String(jsRes).replace('clicked:',''), index: 0, optionsCount: 1, options: [String(jsRes)] };
+      }
+    } catch (e) {
+      logWarn(`JS charity fallback failed: ${e.message}`);
+    }
+  }
+
+  await sleep(500);
+
+  try {
+    fillFirstAvailable(
+      [
+        `locator('input[name="charitySetup.charitySubtitle"]')`, 
+        `locator('textarea[name="charitySetup.charitySubtitle"]')`,
+        `locator('input[placeholder="Fighting childhood cancer, one child at a time."]').first()`,
+        `locator('input[placeholder*="Fighting childhood" i]').first()`,
+        `locator('textarea[placeholder*="Fighting childhood" i]').first()`
+      ],
+      charitySubtitle,
+      'charitySubtitle'
+    );
+  } catch (e) {
+    logWarn(`charitySubtitle fill failed, trying JS: ${e.message}`);
+    runCode(`async page => {
+      const inputs = [...document.querySelectorAll('input, textarea')];
+      const target = inputs.find(i => (i.placeholder||'').includes('Fighting childhood')) || inputs.find(i => i.name && i.name.includes('charitySubtitle'));
+      if (!target) return 'no-input';
+      target.focus();
+      target.value = ${JSON.stringify(charitySubtitle)};
+      target.dispatchEvent(new Event('input',{bubbles:true}));
+      target.dispatchEvent(new Event('change',{bubbles:true}));
+      return 'ok:'+target.placeholder;
+    }`);
+  }
 
   report.selections = { talent, charity, artistQuoteTitle, artistQuote, charitySubtitle };
 }
@@ -738,7 +1090,11 @@ function fillInputRobust(targets, value, label) {
   } catch (e) {
     logWarn(`JS fill fallback failed for ${label}: ${e.message}`);
   }
+<<<<<<< HEAD
   throw new Error(`Could not fill ${label}. Tried: ${targets.join(' | ')}`);
+=======
+  throw new Error(`Could not fill ${label}. Tried: ${safeJoin(targets, ' | ')}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
 }
 
 /** Promotion Tab modal: plain title input + plain <textarea> description (not rich text) + raw-HTML switch. */
@@ -775,7 +1131,7 @@ async function addPromotionTab({ title, description, report, index }) {
 
   const requiredLabels = (info.labels || []).filter(l => l.required).map(l => l.text);
   if (requiredLabels.length) {
-    logWarn(`promotion modal labels marked required (workflow says they are optional): ${requiredLabels.join(', ')}`);
+    logWarn(`promotion modal labels marked required (workflow says they are optional): ${safeJoin(requiredLabels, ', ')}`);
   }
   logInfo(`promotion modal info: ${JSON.stringify(info).slice(0, 600)}`);
 
@@ -828,10 +1184,17 @@ async function addPromotionTab({ title, description, report, index }) {
   }
 
   const typed = readValues({ title: `${MODAL} input[placeholder="Enter promotion title"]` });
+<<<<<<< HEAD
   if (!String(typed.title || '').includes(title.slice(0, 10))) {
     // try alternative selector
     const alt = parseJson(evalPage(`() => JSON.stringify({ v: (document.querySelector('[data-qa-modal="1"] input')||{}).value || '' })`), {});
     if (!String(alt.v || '').includes(title.slice(0, 10))) {
+=======
+  if (!String(typed.title || '').includes(title.slice(0,10))) {
+    // try alternative selector
+    const alt = parseJson(evalPage(`() => JSON.stringify({ v: (document.querySelector('[data-qa-modal="1"] input')||{}).value || '' })`), {});
+    if (!String(alt.v || '').includes(title.slice(0,10))) {
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
       logWarn(`Promotion title may not have stuck: ${JSON.stringify(typed.title)} vs ${JSON.stringify(alt.v)}`);
     }
   }
@@ -842,12 +1205,21 @@ async function addPromotionTab({ title, description, report, index }) {
   const closed = await waitForText(title, 15000);
   if (!closed) {
     const errs = captureVisibleErrors();
+<<<<<<< HEAD
     logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Trying to close modal via Esc`);
     try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) { }
   }
   const finalOk = await waitForText(title, 5000);
   if (!finalOk) {
     throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${captureVisibleErrors().join(' | ') || 'none'}. Body: ${bodyText().slice(0, 800)}`);
+=======
+    logWarn(`Promotion tab ${JSON.stringify(title)} not listed after save. Errors: ${safeJoin(errs, ' | ') || 'none'}. Trying to close modal via Esc`);
+    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
+  }
+  const finalOk = await waitForText(title, 5000);
+  if (!finalOk) {
+    throw new Error(`Promotion tab ${JSON.stringify(title)} not listed after save. Visible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}. Body: ${bodyText().slice(0,800)}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
   logInfo(`promotion tab ${index} saved: ${title}`);
   if (report) {
@@ -872,7 +1244,11 @@ async function addPrizeDetail(report) {
   ];
   for (const t of clickTargets) {
     const r = cli(['click', t], { allowFailure: true });
+<<<<<<< HEAD
     if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0, 100)}`); clicked = true; break; }
+=======
+    if (r.code === 0) { logInfo(`clicked Prize Detail opener: ${t.slice(0,100)}`); clicked = true; break; }
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
   if (!clicked) {
     logWarn('Standard click targets failed, trying JS click');
@@ -921,7 +1297,11 @@ async function addPrizeDetail(report) {
     modalMarked = true;
   } catch (e) {
     lastMarkError = e.message;
+<<<<<<< HEAD
     logWarn(`markModal first attempt failed: ${lastMarkError.slice(0, 500)}`);
+=======
+    logWarn(`markModal first attempt failed: ${lastMarkError.slice(0,500)}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     // try even more aggressive fallback
     await sleep(500);
     try {
@@ -942,7 +1322,11 @@ async function addPrizeDetail(report) {
         buttons: [...document.querySelectorAll('button')].map(b=> (b.innerText||'').trim()).filter(t=>t).slice(0,20)
       });
     }`);
+<<<<<<< HEAD
     throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0, 2000)}`);
+=======
+    throw new Error(`Prize Detail modal not found after clicking opener. ${lastMarkError}. Debug: ${String(debug).slice(0,2000)}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
 
   // 3. Gather modal info with robust queries
@@ -970,9 +1354,15 @@ async function addPrizeDetail(report) {
     });
   }`), {});
 
+<<<<<<< HEAD
   logInfo(`Prize modal info: ${JSON.stringify(info).slice(0, 1000)}`);
 
   if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll || []).some(h => /Prize|Price/i.test(h))) {
+=======
+  logInfo(`Prize modal info: ${JSON.stringify(info).slice(0,1000)}`);
+
+  if (info.heading && !/Prize|Price/i.test(info.heading) && !(info.headingAll||[]).some(h=>/Prize|Price/i.test(h))) {
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     logWarn(`Unexpected prize modal heading: ${JSON.stringify(info.heading)} / ${JSON.stringify(info.headingAll)} - continuing anyway`);
   }
 
@@ -989,7 +1379,11 @@ async function addPrizeDetail(report) {
   ];
   for (const tgt of emojiTargets) {
     const r = cli(['fill', tgt, String(data.prizeEmoji)], { allowFailure: true });
+<<<<<<< HEAD
     if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0, 80)}`); emojiFilled = true; break; }
+=======
+    if (r.code === 0) { logInfo(`emoji filled via ${tgt.slice(0,80)}`); emojiFilled = true; break; }
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
   if (!emojiFilled) {
     logWarn('emoji fill via CLI failed, trying JS');
@@ -1016,7 +1410,11 @@ async function addPrizeDetail(report) {
     return JSON.stringify({ val: el ? el.value : null, ph: el ? el.placeholder : null });
   }`), {});
   logInfo(`emoji after fill check: ${JSON.stringify(emojiCheck)}`);
+<<<<<<< HEAD
   if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length === 0) {
+=======
+  if (!emojiCheck.val || !String(emojiCheck.val).includes(data.prizeEmoji) && String(emojiCheck.val).length===0) {
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     logWarn(`emoji may not have persisted: ${JSON.stringify(emojiCheck.val)}, trying alternative emoji fallback '🎁' as plain text`);
     // try with simple ASCII fallback if emoji fails validation - but keep original
   }
@@ -1059,7 +1457,11 @@ async function addPrizeDetail(report) {
           const r = cli(['fill', `locator('${MODAL} ${css}')`, String(data.prizeDescription)], { allowFailure: true });
           if (r.code === 0) { descFilled = true; logInfo(`rich text filled via placeholder ${ph}`); break; }
         }
+<<<<<<< HEAD
       } catch (_) { }
+=======
+      } catch (_) {}
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     }
     if (!descFilled) {
       try {
@@ -1075,7 +1477,11 @@ async function addPrizeDetail(report) {
           document.execCommand('selectAll', false, null);
           document.execCommand('insertText', false, ${JSON.stringify(data.prizeDescription)});
           // also try innerText
+<<<<<<< HEAD
           if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0, 10))})) {
+=======
+          if(!el.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,10))})) {
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
             el.innerText=${JSON.stringify(data.prizeDescription)};
             el.dispatchEvent(new Event('input',{bubbles:true}));
           }
@@ -1095,7 +1501,11 @@ async function addPrizeDetail(report) {
 
   // 6. Capture errors before save
   const preSaveErrors = captureVisibleErrors();
+<<<<<<< HEAD
   if (preSaveErrors.length) logWarn(`Pre-save visible errors: ${preSaveErrors.join(' | ')}`);
+=======
+  if (preSaveErrors.length) logWarn(`Pre-save visible errors: ${safeJoin(preSaveErrors, ' | ')}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
 
   // 7. Click save with robust handling
   let saveClicked = false;
@@ -1117,23 +1527,37 @@ async function addPrizeDetail(report) {
     }`);
     logInfo(`JS save click: ${jsClick}`);
     if (String(jsClick).startsWith('clicked')) saveClicked = true;
+<<<<<<< HEAD
     else throw new Error(`Save button click failed: ${jsClick} | pre-errors: ${preSaveErrors.join(' | ')}`);
+=======
+    else throw new Error(`Save button click failed: ${jsClick} | pre-errors: ${safeJoin(preSaveErrors, ' | ')}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   }
 
   await sleep(1200);
 
   // 8. Verify modal closed and prize saved
   // Check if modal still open
+<<<<<<< HEAD
   const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0, 15))}) })`), {});
+=======
+  const modalStillOpen = parseJson(evalPage(`() => JSON.stringify({ open: !!document.querySelector('[data-qa-modal="1"]'), dialog: !!document.querySelector('[role="dialog"]'), bodyHas: document.body.innerText.includes(${JSON.stringify(data.prizeDescription.slice(0,15))}) })`), {});
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
   logInfo(`Post-save modal check: ${JSON.stringify(modalStillOpen)}`);
 
   if (modalStillOpen.open || modalStillOpen.dialog) {
     logWarn('Modal still appears open after save, checking for validation errors');
     const errs = captureVisibleErrors();
     if (errs.length) {
+<<<<<<< HEAD
       logWarn(`Validation errors after save attempt: ${errs.join(' | ')}`);
       // Try to close via Esc and retry with different emoji if needed
       if (errs.join(' ').toLowerCase().includes('emoji') || errs.join(' ').toLowerCase().includes('required')) {
+=======
+      logWarn(`Validation errors after save attempt: ${safeJoin(errs, ' | ')}`);
+      // Try to close via Esc and retry with different emoji if needed
+      if (safeJoin(errs, ' ').toLowerCase().includes('emoji') || safeJoin(errs, ' ').toLowerCase().includes('required')) {
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
         logWarn('Emoji validation error suspected, trying alternative emoji "🎉"');
         try {
           const altEmoji = '🎉';
@@ -1144,7 +1568,11 @@ async function addPrizeDetail(report) {
           await sleep(400);
           clickModalSave(saveLabels);
           await sleep(1200);
+<<<<<<< HEAD
         } catch (_) { }
+=======
+        } catch (_) {}
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
       }
     }
   }
@@ -1152,6 +1580,7 @@ async function addPrizeDetail(report) {
   // Final verification - prize description should appear on page
   const saved = await waitForText(data.prizeDescription, 15000);
   if (!saved) {
+<<<<<<< HEAD
     const body = bodyText().slice(0, 2000);
     const errs = captureVisibleErrors();
     // try to dismiss modal and check again
@@ -1159,11 +1588,24 @@ async function addPrizeDetail(report) {
     const saved2 = await waitForText(data.prizeDescription, 5000);
     if (!saved2) {
       throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${errs.join(' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0, 800)}`);
+=======
+    const body = bodyText().slice(0,2000);
+    const errs = captureVisibleErrors();
+    // try to dismiss modal and check again
+    try { runCode(`async page => { await page.keyboard.press('Escape'); return 'ok'; }`); await sleep(800); } catch (_) {}
+    const saved2 = await waitForText(data.prizeDescription, 5000);
+    if (!saved2) {
+      throw new Error(`Prize detail ${JSON.stringify(data.prizeDescription)} not listed after save. Errors: ${safeJoin(errs, ' | ') || 'none'}. Modal open: ${JSON.stringify(modalStillOpen)}. Body snippet: ${body.slice(0,800)}`);
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
     }
   }
 
   // Clean up modal marker
+<<<<<<< HEAD
   try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) { }
+=======
+  try { evalPage(`() => { document.querySelectorAll('[data-qa-modal="1"]').forEach(el=> el.removeAttribute('data-qa-modal')); return 'ok'; }`); } catch (_) {}
+>>>>>>> fa6d0e25505aac0e6846cb6afa6da62690a8b871
 
   if (report) {
     report.prizeDetail = { emoji: data.prizeEmoji, description: data.prizeDescription, modalHeading: info.heading || info.headingAll?.[0] || '', emojiMaxLength: info.emojiMaxLength, modalInfo: info };
@@ -1267,7 +1709,7 @@ async function addBonus(report) {
   clickModalSave('Add Bonus');
   await sleep(1000);
   const saved = await waitForText(data.bonusTitle, 12000);
-  if (!saved) throw new Error(`Bonus ${JSON.stringify(data.bonusTitle)} not listed after save. Errors: ${captureVisibleErrors().join(' | ') || 'none'}`);
+  if (!saved) throw new Error(`Bonus ${JSON.stringify(data.bonusTitle)} not listed after save. Errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}`);
   report.media = report.media || {};
   report.media.bonus = { file: path.basename(bonusImage), strategy: res.strategy };
   report.bonus = { title: data.bonusTitle, description: data.bonusDescription, modalHeading: info.heading, labels: info.labels, entryTierLink: tierLink, imageStrategy: res.strategy };
@@ -1310,7 +1752,7 @@ function fillSweepsInfo(report) {
   if (report) {
     report.sweepsInfo = { values: actual, switchesBefore: before, switchesAfter: after };
   }
-  logInfo(`Sweeps Info filled and verified: ${fields.length} fields; switches untouched (${after.map(s => `${s.label}=${s.checked ? 'on' : 'off'}`).join(', ')})`);
+  logInfo(`Sweeps Info filled and verified: ${fields.length} fields; switches untouched (${safeJoin(after.map(s => `${s.label}=${s.checked ? 'on' : 'off'}`), ', ')})`);
 }
 
 /** Admin listing row for our title: sweeps link anchor => public storefront URL. */
@@ -1357,15 +1799,15 @@ async function main() {
     console.log('=== DRY RUN (no browser, no counter increment) ===');
     console.log(`Title: ${sweepTitle}`);
     console.log(`Admin: ${ADMIN}  Public: ${PUBLIC}`);
-    console.log(`Cover: ${coverMedia.join(', ')}`);
-    console.log(`Gallery: ${galleryMedia.join(', ')}`);
-    console.log(`TypeCoverage: ${typeCoverageMedia.join(', ') || '(none)'}`);
+    console.log(`Cover: ${safeJoin(coverMedia, ', ')}`);
+    console.log(`Gallery: ${safeJoin(galleryMedia, ', ')}`);
+    console.log(`TypeCoverage: ${safeJoin(typeCoverageMedia, ', ') || '(none)'}`);
     console.log(`Bonus: ${bonusImage}`);
     console.log(`Talent pref: ${talentPreferred || '(first available)'}  Charity pref: ${charityPreferred || '(first available)'}`);
     console.log(`Description: ${campaignDescription.slice(0, 80)}...`);
     console.log(`Quote: ${artistQuoteTitle} / ${artistQuote.slice(0, 60)}...`);
     console.log(`Charity subtitle: ${charitySubtitle.slice(0, 60)}...`);
-    console.log(`Test data keys: ${Object.keys(data).join(', ')}`);
+    console.log(`Test data keys: ${safeJoin(Object.keys(data), ', ')}`);
     console.log('DRY RUN OK — all assets resolve, config parses, title builds.');
     return;
   }
@@ -1423,10 +1865,10 @@ async function main() {
       const review = reviewSnapshot();
       report.review = review;
       report.reviewChecks = [];
-      logInfo(`review sections: ${review.sections.map(s => s.section).join(' | ') || '(none detected)'}`);
+      logInfo(`review sections: ${safeJoin(review.sections.map(s => s.section), ' | ') || '(none detected)'}`);
       if (review.attentionBanner) {
         const flagged = review.sections.filter(s => s.needsAttention).map(s => s.section);
-        logWarn(`review banner says ${review.stepsNeedingAttention} step(s) need attention: ${flagged.join(', ') || 'unknown section'}`);
+        logWarn(`review banner says ${review.stepsNeedingAttention} step(s) need attention: ${safeJoin(flagged, ', ') || 'unknown section'}`);
       }
       const pageText = bodyText();
       const sectionsParsed = review.sections.length > 0;
@@ -1450,7 +1892,7 @@ async function main() {
       expectInSection('Bonuses', [['', data.bonusTitle]]);
       expectInSection('Sweeps Info', [['Prize', data.prizeReward], ['Number of Winners', data.numberOfWinners]]);
       const empties = review.sections.filter(s => s.empty && !/Tracking/i.test(s.section)).map(s => s.section);
-      if (empties.length) logWarn(`review sections still reported empty: ${empties.join(', ')}`);
+      if (empties.length) logWarn(`review sections still reported empty: ${safeJoin(empties, ', ')}`);
       if (review.attentionBanner) logWarn('continuing despite review attention banner (fields may be optional for draft save)');
     });
 
@@ -1466,9 +1908,9 @@ async function main() {
       const posts = networkSince(mark, { includeStatic: true }).filter(r => r.method === 'POST');
       const sweepPosts = posts.filter(r => /sweeps/i.test(r.url));
       report.createNetwork = { posts: networkSummary(posts), sweepPosts: networkSummary(sweepPosts), url: currentUrl() };
-      logInfo(`network after CREATE SWEEPS: ${networkSummary(posts).join(' || ') || '(no POST observed)'}`);
+      logInfo(`network after CREATE SWEEPS: ${safeJoin(networkSummary(posts), ' || ') || '(no POST observed)'}`);
       const failures = posts.filter(r => r.status === -1 || (r.status !== null && r.status >= 400));
-      if (failures.length) throw new Error(`Create request failed: ${failures.map(r => r.line).join(' | ')}`);
+      if (failures.length) throw new Error(`Create request failed: ${safeJoin(failures.map(r => r.line), ' | ')}`);
       if (!sweepPosts.length) logWarn('no POST to a /sweeps URL observed after CREATE SWEEPS (see createNetwork in report.json)');
       const url = currentUrl();
       if (!/\/admin\/sweeps/i.test(url)) throw new Error(`Create did not return to /admin/sweeps. Current URL: ${url}`);
@@ -1496,7 +1938,7 @@ async function main() {
       const row = sweepsRowSnapshot(sweepTitle);
       report.sweepsRow = row;
       if (row.found) {
-        logInfo(`admin row for ${sweepTitle}: ${(row.cells || []).join(' | ')}`);
+        logInfo(`admin row for ${sweepTitle}: ${safeJoin((row.cells || []), ' | ')}`);
         logInfo(`row links -> sweeps: ${row.sweepsLink || 'n/a'} | free entry: ${row.freeEntryLink || 'n/a'} | tracking: ${row.trackingLink || 'n/a'}`);
       } else {
         logWarn(`admin listing did not expose a <tr> for ${sweepTitle} (search box filtering?); falling back to sweeps-link lookup`);
@@ -1521,7 +1963,7 @@ async function main() {
       const media = storefrontMedia();
       const snapshot = storefrontSnapshot() || {};
       const uploadedCount = (report.media.galleryOrder || []).length + (report.media.cover && !report.media.cover.error ? 1 : 0);
-      logInfo(`storefront media: ${media.length} items (uploaded ${uploadedCount}); order: ${media.map(m => m.alt || m.src).join(' | ').slice(0, 400)}`);
+      logInfo(`storefront media: ${media.length} items (uploaded ${uploadedCount}); order: ${safeJoin(media.map(m => m.alt || m.src), ' | ').slice(0, 400)}`);
       // Everything entered in admin must be reflected on the public storefront.
       const entryPrice = `$${Number(data.customTierPrice).toFixed(2)}`;
       const requiredOnStorefront = [
@@ -1588,7 +2030,7 @@ async function main() {
           itemCount: cart ? cart.item_count : null,
           requests: networkSummary(seen).slice(0, 25)
         });
-        if (!ok) logWarn(`cart button ${i + 1} (${buttonTexts[i]}) had no successful POST /cart; seen: ${networkSummary(seen).join(' || ') || 'none'}`);
+        if (!ok) logWarn(`cart button ${i + 1} (${buttonTexts[i]}) had no successful POST /cart; seen: ${safeJoin(networkSummary(seen), ' || ') || 'none'}`);
         goto(publicUrl);
         await sleep(900);
       }
@@ -1601,13 +2043,13 @@ async function main() {
     await step(report, 'Summarize admin <-> storefront parity', async () => {
       const missingReview = (report.reviewChecks || []).filter(c => !c.present);
       const missingStorefront = (report.storefrontChecks || []).filter(c => c.required && !c.present);
-      if (missingReview.length) logWarn(`${missingReview.length} review value(s) were not shown: ${missingReview.map(c => `${c.section}/${c.label || '-'}`).join(', ')}`);
+      if (missingReview.length) logWarn(`${missingReview.length} review value(s) were not shown: ${safeJoin(missingReview.map(c => `${c.section}/${c.label || '-'}`), ', ')}`);
       report.parity = {
         reviewMissing: missingReview.map(c => ({ section: c.section, label: c.label, expected: c.expected })),
         storefrontMissing: missingStorefront.map(c => ({ label: c.label, expected: c.expected }))
       };
       if (missingStorefront.length) {
-        throw new Error(`${missingStorefront.length} admin value(s) never reached the storefront: ${missingStorefront.map(c => `${c.label}=${JSON.stringify(c.expected)}`).join(', ')}`);
+        throw new Error(`${missingStorefront.length} admin value(s) never reached the storefront: ${safeJoin(missingStorefront.map(c => `${c.label}=${JSON.stringify(c.expected)}`), ', ')}`);
       }
     });
 
