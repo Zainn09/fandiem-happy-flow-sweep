@@ -54,10 +54,71 @@ async function ensurePlaywrightAttached() {
     } catch (e) {
       logWarn(`Failed to spawn attach.js: ${e.message}`);
     }
+<<<<<<< HEAD
     // Best-effort: also try to open a new blank tab which can trigger extension UI to re-appear
     try {
       cli(['tab-new', 'about:blank'], { allowFailure: true });
     } catch (_) {}
+=======
+
+    // --- FIX: open the actual extension permission pages ---
+    const EXT_ID = 'mmlmfjhmonkocbjadbfplnigmagldckm';
+    const connectUrls = [
+      `chrome-extension://${EXT_ID}/connect.html`,
+      `chrome-extension://${EXT_ID}/status.html`,
+    ];
+
+    // 1) Try via playwright-cli tab-new (if session partially attached, this will work)
+    for (const u of connectUrls) {
+      try {
+        const res = cli(['tab-new', u], { allowFailure: true });
+        if (res.code === 0) {
+          logInfo(`Opened permission page via tab-new: ${u}`);
+          break;
+        }
+      } catch (_) {}
+    }
+
+    // 2) Most reliable when NOT attached: spawn Chrome directly with extension URL in the right profile
+    // This bypasses Playwright and forces the Welcome/Allow & select page to appear.
+    try {
+      const fs = require('fs');
+      const { spawnSync } = require('child_process');
+      // Get profile dir via profile.js (same as attach.js does)
+      let profileDir = '';
+      try {
+        const profRes = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'profile.js')], {
+          cwd: ROOT,
+          encoding: 'utf8',
+          windowsHide: true
+        });
+        const m = String(profRes.stdout||'').match(/^Profile directory:\s*(.+)$/m);
+        if (m) profileDir = m[1].trim();
+      } catch (_) {}
+      const chromePath = config.chromeExecutablePath || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+      if (profileDir && fs.existsSync(chromePath)) {
+        for (const u of connectUrls) {
+          try {
+            const { spawn } = require('child_process');
+            const child2 = spawn(chromePath, [`--profile-directory=${profileDir}`, u], {
+              detached: true,
+              stdio: 'ignore',
+              windowsHide: false
+            });
+            child2.unref();
+            logInfo(`Spawned Chrome profile ${profileDir} with URL ${u}`);
+            break;
+          } catch (e) {
+            logWarn(`Chrome spawn for ${u} failed: ${e.message}`);
+          }
+        }
+      } else {
+        logWarn(`Could not spawn Chrome directly (profileDir=${profileDir||'unknown'} chromeExists=${fs.existsSync(chromePath)})`);
+      }
+    } catch (e) {
+      logWarn(`Direct Chrome open failed: ${e.message}`);
+    }
+>>>>>>> 0ec639d2a6b4356a642919c398392ace8453cdec
   }
 
   launchAttach('Initial attach attempt...');
