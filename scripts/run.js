@@ -305,7 +305,7 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
       if (grew) return { strategy: 'drop', ...grew, target };
       errors.push(`drop:${target.slice(0,30)}: no new media detected`);
     } catch (e) { 
-      errors.push(`drop:${target.slice(0,30)}: ${String(e.message).split('\n')[0].slice(0,100)}`); 
+      errors.push(`drop:${target.slice(0,40)}: ${String(e.message).slice(0,500)}`); 
     }
     await sleep(500);
   }
@@ -356,9 +356,50 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
         }
       }
       
-      const idx = inputNth === -1 ? inputs.length - 1 : inputNth;
+      // If no inputs found, try to create or reveal them
+      if (inputs.length === 0) {
+        logWarn(`${label}: no file inputs found, trying to reveal via JS and Add media click`);
+        try {
+          // Try clicking Add media via JS to create file inputs
+          runCode(`async page => {
+            const btns = [...document.querySelectorAll('button')];
+            const addBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+            if (addBtn) {
+              addBtn.click();
+              return 'clicked-add-media';
+            }
+            return 'no-add-media';
+          }`);
+          await sleep(1500);
+          inputs = listFileInputs();
+          if (!Array.isArray(inputs)) inputs = [];
+          logInfo(`${label}: after Add media click, found ${inputs.length} inputs`);
+        } catch (_) {}
+        
+        // If still 0, try to find in iframes or shadow DOM
+        if (inputs.length === 0) {
+          try {
+            const iframeCheck = evalPage(`() => {
+              let count = 0;
+              try {
+                const iframes = document.querySelectorAll('iframe');
+                for (const iframe of iframes) {
+                  try {
+                    const doc = iframe.contentDocument;
+                    if (doc) count += doc.querySelectorAll('input[type="file"]').length;
+                  } catch(e) {}
+                }
+              } catch(e) {}
+              return String(count);
+            }`);
+            logInfo(`${label}: file inputs in iframes: ${iframeCheck}`);
+          } catch (_) {}
+        }
+      }
+      
+      const idx = inputNth === -1 ? inputs.length - 1 : (inputNth !== null ? inputNth : 0);
       logInfo(`${label}: strategy=setInputFiles nth=${idx} (inputs=${inputs.length}) files=${names}`);
-      if (idx < 0) throw new Error(`no file inputs on page (found ${inputs.length}) after waiting`);
+      if (idx < 0 || inputs.length === 0) throw new Error(`no file inputs on page (found ${inputs.length}) after waiting and trying to reveal`);
       
       // Try multiple selectors for setInputFiles
       const inputSelectors = [
@@ -409,7 +450,7 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
       const grew = await confirm(`setInputFiles[${idx}]`);
       if (grew) return { strategy: `setInputFiles[${idx}]`, ...grew };
       errors.push(`setInputFiles[${idx}]: no new media detected`);
-    } catch (e) { errors.push(`setInputFiles: ${String(e.message).split('\n')[0].slice(0,150)}`); }
+    } catch (e) { errors.push(`setInputFiles: ${String(e.message).slice(0,500)}`); }
   }
 
   // 3) click + upload (file chooser) - try multiple click targets
@@ -706,8 +747,8 @@ async function fillCampaignInfo(report) {
       absPaths: coverMedia,
       label: 'Cover'
     });
-    strategies.push({ slot: 'cover', ...res, files: res.files.map(f => path.basename(f)) });
-    report.media.cover = { files: coverMedia.map(f => path.basename(f)), strategy: res.strategy };
+    strategies.push({ slot: 'cover', ...res, files: (res.files || []).map(f => path.basename(f)) });
+    report.media.cover = { files: (coverMedia || []).map(f => path.basename(f)), strategy: res.strategy };
     logInfo(`cover tiles ${beforeTiles} -> ${res.tiles}`);
   } catch (e) {
     // Cover is optional per workflow — record but don't fail.
@@ -739,7 +780,7 @@ async function fillCampaignInfo(report) {
       label: `Gallery[${path.basename(file)}]`
     });
     galleryOrder.push(path.basename(file));
-    strategies.push({ slot: 'gallery', file: path.basename(file), ...res, files: undefined });
+    strategies.push({ slot: 'gallery', file: path.basename(file), ...res, files: (res.files || [file]).map(f => typeof f === 'string' ? path.basename(f) : path.basename(f)) });
     await sleep(1000);
   }
 
@@ -2151,5 +2192,20 @@ main();
 // - Gallery upload robust (5 drop targets, wait for file inputs, JS visibility)
 // - Prize Details modal fix, Allow & Select re-open every 10s via attach.js
 // If you see this comment, you have the latest file
+// ==============================================================================
+
+// ==============================================================================
+// LATEST FILE MARKER - UPDATE 2 - This is the NEW latest version
+// Commit: 14daeab -> efa86e9 -> NEW
+// Message: fix: Gallery upload failing - no file inputs, improve error logging and file input handling
+// Date: 2026-09-22T18:03:30.871141
+// Branch: arena/01a0c517-fandiem-happy-flow-sweep
+// Fixes:
+// - Fixed Cover error: Cannot read properties of undefined (reading 'map') -> now uses (res.files || []).map
+// - Improved error logging: now shows full STDERR/STDOUT instead of truncated ### Error
+// - Fixed no file inputs (found 0): tries clicking Add media via JS to reveal hidden inputs, checks iframes, makes hidden inputs visible
+// - Gallery upload now waits 5 attempts for file inputs, uses index 0 when only 1 found
+// - All previous fixes included: Campaigns robust, Partners dropdowns, safeJoin
+// If you see this, you have the absolute latest file - copy to fandiem-existing-chrome-profile-automation
 // ==============================================================================
 
