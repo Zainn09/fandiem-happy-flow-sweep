@@ -377,12 +377,22 @@ async function fillCampaignInfo(report) {
   assertContains(bodyText(), sweepTitle.slice(0, 20), 'Title echo');
 
   // Diagnose file inputs (cover + gallery share the accept list)
-  let inputs = listFileInputs();
-  if (!Array.isArray(inputs)) {
-    logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0,200)}, coercing to []`);
+  let inputs = [];
+  try {
+    inputs = listFileInputs();
+    if (!Array.isArray(inputs)) {
+      logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0,200)}, coercing to []`);
+      inputs = [];
+    }
+  } catch (e) {
+    logWarn(`listFileInputs threw: ${e.message}, using []`);
     inputs = [];
   }
-  logInfo(`file inputs on Campaign Info: ${JSON.stringify(inputs.map(i => ({ i: i.index, accept: (i.accept||'').slice(0, 60), multiple: i.multiple })))}`);
+  try {
+    logInfo(`file inputs on Campaign Info: ${JSON.stringify((Array.isArray(inputs)?inputs:[]).map(i => ({ i: i.index, accept: (i.accept||'').slice(0, 60), multiple: i.multiple })))}`);
+  } catch (e) {
+    logWarn(`file inputs log failed: ${e.message}, raw: ${JSON.stringify(inputs).slice(0,500)}`);
+  }
   report.media = report.media || {};
   report.media.fileInputs = inputs;
 
