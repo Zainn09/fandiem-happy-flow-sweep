@@ -734,6 +734,22 @@ async function fillCampaignInfo(report) {
     } catch (_) { }
   }
 
+  if (inputs.length === 0) {
+    logWarn(`No file inputs found after waiting, will try to trigger via Add media button`);
+    try {
+      // Try to find and click any area that might reveal file inputs
+      runCode(`async page => {
+        const btns = [...document.querySelectorAll('button')];
+        const addMediaBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+        if (addMediaBtn) {
+          // Don't click yet, just check if it exists
+          return 'found-add-media:' + addMediaBtn.innerText;
+        }
+        return 'no-add-media-btn';
+      }`);
+    } catch (_) { }
+  }
+
   const galleryOrder = [];
   const strategies = [];
 
@@ -902,28 +918,72 @@ async function fillPartners(report) {
   }
 
   if (!talent) {
-    // Last resort JS click
-    logWarn('All talent select attempts failed, trying JS fallback');
-    try {
-      const jsRes = runCode(`async page => {
+    // Last resort JS click - try multiple methods
+    logWarn('All talent select attempts failed, trying JS fallback with multiple methods');
+    const jsMethods = [
+      // Method 1: Find by Select talents text
+      `async page => {
         const btns = [...document.querySelectorAll('button')];
-        const talentBtn = btns.find(b => (b.innerText||'').includes('Select talents')) || document.querySelector('[role="combobox"]');
-        if (!talentBtn) return 'no-btn';
+        const talentBtn = btns.find(b => (b.innerText||'').includes('Select talents')) || document.querySelector('[role="combobox"]') || document.querySelector('[data-slot="select-trigger"]');
+        if (!talentBtn) return 'no-btn:found=' + btns.length;
+        talentBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise(r => setTimeout(r, 500));
         talentBtn.click();
-        await new Promise(r => setTimeout(r, 1000));
-        const opts = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"]')];
-        if (!opts.length) return 'no-opts:'+document.body.innerHTML.slice(0,500);
-        // Click first available
+        await new Promise(r => setTimeout(r, 1500));
+        const opts = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"], [data-radix-collection-item]')];
+        if (!opts.length) {
+          // Try to find in body for portal
+          const allOpts = [...document.body.querySelectorAll('[role="option"], [data-slot="select-item"]')];
+          if (!allOpts.length) return 'no-opts:body=' + document.body.innerHTML.slice(0,800);
+          const first = allOpts[0];
+          first.click();
+          return 'clicked-portal:'+(first.innerText||'').slice(0,50);
+        }
         const first = opts.find(o => !o.hasAttribute('aria-disabled') && !o.hasAttribute('data-disabled')) || opts[0];
         first.click();
         return 'clicked:'+(first.innerText||'').slice(0,50);
-      }`);
-      logInfo(`JS talent fallback: ${jsRes}`);
-      if (String(jsRes).startsWith('clicked')) {
-        talent = { text: String(jsRes).replace('clicked:', ''), index: 0, optionsCount: 1, options: [String(jsRes)] };
+      }`,
+      // Method 2: Try clicking via coordinates and waiting longer
+      `async page => {
+        const btn = document.querySelector('button[role="combobox"]') || [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Select talents'));
+        if (!btn) return 'no-btn2';
+        const rect = btn.getBoundingClientRect();
+        await page.mouse.click(rect.x + rect.width/2, rect.y + rect.height/2);
+        await new Promise(r => setTimeout(r, 2000));
+        const opts = [...document.querySelectorAll('[role="option"]')];
+        if (opts[0]) { opts[0].click(); return 'clicked2:' + opts[0].innerText.slice(0,30); }
+        return 'no-opts2';
+      }`,
+      // Method 3: Try to directly set via React props or form state
+      `async page => {
+        try {
+          // Try to find React fiber and set value
+          const btn = document.querySelector('[role="combobox"]');
+          if (!btn) return 'no-btn3';
+          // Try to trigger via keyboard
+          btn.focus();
+          await page.keyboard.press('Enter');
+          await new Promise(r => setTimeout(r, 1000));
+          await page.keyboard.press('ArrowDown');
+          await new Promise(r => setTimeout(r, 500));
+          await page.keyboard.press('Enter');
+          return 'tried-keyboard';
+        } catch(e) { return 'error3:' + e.message; }
+      }`
+    ];
+
+    for (let i = 0; i < jsMethods.length; i++) {
+      try {
+        const jsRes = runCode(jsMethods[i]);
+        logInfo(`JS talent fallback method ${i + 1}: ${jsRes}`);
+        if (String(jsRes).startsWith('clicked')) {
+          talent = { text: String(jsRes).split(':').slice(1).join(':') || 'Unknown', index: 0, optionsCount: 1, options: [String(jsRes)] };
+          break;
+        }
+      } catch (e) {
+        logWarn(`JS talent fallback method ${i + 1} failed: ${e.message}`);
       }
-    } catch (e) {
-      logWarn(`JS talent fallback failed: ${e.message}`);
+      await sleep(1000);
     }
   }
 
@@ -1020,26 +1080,50 @@ async function fillPartners(report) {
   }
 
   if (!charity) {
-    logWarn('All charity select attempts failed, trying JS fallback');
-    try {
-      const jsRes = runCode(`async page => {
+    logWarn('All charity select attempts failed, trying JS fallback with multiple methods');
+    const jsMethods = [
+      `async page => {
         const btns = [...document.querySelectorAll('button')];
-        const charityBtn = btns.find(b => (b.innerText||'').includes('Select one or more charities')) || [...document.querySelectorAll('[role="combobox"]')][1];
-        if (!charityBtn) return 'no-btn';
+        const charityBtn = btns.find(b => (b.innerText||'').includes('Select one or more charities')) || [...document.querySelectorAll('[role="combobox"]')][1] || [...document.querySelectorAll('[data-slot="select-trigger"]')][1];
+        if (!charityBtn) return 'no-btn:found=' + btns.filter(b=> (b.innerText||'').includes('charities')).length;
+        charityBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        await new Promise(r => setTimeout(r, 500));
         charityBtn.click();
-        await new Promise(r => setTimeout(r, 1000));
+        await new Promise(r => setTimeout(r, 1500));
         const opts = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"]')];
-        if (!opts.length) return 'no-opts';
+        if (!opts.length) {
+          const allOpts = [...document.body.querySelectorAll('[role="option"], [data-slot="select-item"]')];
+          if (allOpts[0]) { allOpts[0].click(); return 'clicked-portal:' + allOpts[0].innerText.slice(0,30); }
+          return 'no-opts:body=' + document.body.innerHTML.slice(0,500);
+        }
         const first = opts.find(o => !o.hasAttribute('aria-disabled')) || opts[0];
         first.click();
         return 'clicked:'+(first.innerText||'').slice(0,50);
-      }`);
-      logInfo(`JS charity fallback: ${jsRes}`);
-      if (String(jsRes).startsWith('clicked')) {
-        charity = { text: String(jsRes).replace('clicked:', ''), index: 0, optionsCount: 1, options: [String(jsRes)] };
+      }`,
+      `async page => {
+        const btns = [...document.querySelectorAll('[data-slot="select-trigger"]')];
+        const charityBtn = btns[1] || btns[0];
+        if (!charityBtn) return 'no-btn2';
+        charityBtn.click();
+        await new Promise(r => setTimeout(r, 1500));
+        const opts = [...document.querySelectorAll('[role="option"]')];
+        if (opts[0]) { opts[0].click(); return 'clicked2:' + opts[0].innerText.slice(0,30); }
+        return 'no-opts2';
+      }`
+    ];
+
+    for (let i = 0; i < jsMethods.length; i++) {
+      try {
+        const jsRes = runCode(jsMethods[i]);
+        logInfo(`JS charity fallback method ${i + 1}: ${jsRes}`);
+        if (String(jsRes).startsWith('clicked')) {
+          charity = { text: String(jsRes).split(':').slice(1).join(':') || 'Unknown', index: 0, optionsCount: 1, options: [String(jsRes)] };
+          break;
+        }
+      } catch (e) {
+        logWarn(`JS charity fallback method ${i + 1} failed: ${e.message}`);
       }
-    } catch (e) {
-      logWarn(`JS charity fallback failed: ${e.message}`);
+      await sleep(1000);
     }
   }
 
@@ -2207,5 +2291,19 @@ main();
 // - Gallery upload now waits 5 attempts for file inputs, uses index 0 when only 1 found
 // - All previous fixes included: Campaigns robust, Partners dropdowns, safeJoin
 // If you see this, you have the absolute latest file - copy to fandiem-existing-chrome-profile-automation
+// ==============================================================================
+
+// ==============================================================================
+// LATEST FILE MARKER - UPDATE 3 - 2026-09-22 18:30 - PARTNERS FIX
+// Commit: fix Partners Could not select talent partner after all attempts
+// Date: 2026-09-22T18:24:44.484995
+// Fixes:
+// - 01 PASS (Campaigns) and 02 PASS (Gallery) now working!
+// - 03 FAIL Partners: talent selection failed after all attempts
+// - Improved talent JS fallback: 3 methods (text search + scroll, coordinates click, keyboard Enter/ArrowDown/Enter)
+// - Improved charity JS fallback: 2 methods with scroll and portal detection
+// - Tries to find options in document.body for Radix portal
+// - Scrolls combobox into view before clicking
+// - If you see this, you have latest with Partners fix
 // ==============================================================================
 

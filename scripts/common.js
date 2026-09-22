@@ -163,7 +163,7 @@ function listFileInputs() {
     }
     return [];
   } catch (e) {
-    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch (_) { }
+    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch(_) {}
     return [];
   }
 }
@@ -182,11 +182,11 @@ function dropFiles(target, absPaths) {
       const res = cli(['drop', target, ...absPaths.map(p => `--path=${p}`)], { allowFailure: true });
       if (res.code !== 0) {
         const fullErr = `STDERR: ${res.stderr}\nSTDOUT: ${res.stdout}`;
-        throw new Error(`drop failed for target ${target}: ${fullErr.slice(0, 1000)}`);
+        throw new Error(`drop failed for target ${target}: ${fullErr.slice(0,1000)}`);
       }
       return res;
     } catch (e2) {
-      throw new Error(`dropFiles ${target} error: ${e2.message.slice(0, 1000)} | original: ${e.message.slice(0, 500)}`);
+      throw new Error(`dropFiles ${target} error: ${e2.message.slice(0,1000)} | original: ${e.message.slice(0,500)}`);
     }
   }
 }
@@ -201,11 +201,11 @@ function uploadFiles(absPaths) {
     try {
       const res = cli(['upload', ...absPaths], { allowFailure: true });
       if (res.code !== 0) {
-        throw new Error(`upload failed: STDERR=${res.stderr.slice(0, 800)} STDOUT=${res.stdout.slice(0, 800)}`);
+        throw new Error(`upload failed: STDERR=${res.stderr.slice(0,800)} STDOUT=${res.stdout.slice(0,800)}`);
       }
       return res;
     } catch (e2) {
-      throw new Error(`uploadFiles error: ${e2.message.slice(0, 1000)}`);
+      throw new Error(`uploadFiles error: ${e2.message.slice(0,1000)}`);
     }
   }
 }
@@ -275,19 +275,19 @@ function captureVisibleErrors() {
     }
     return [];
   } catch (e) {
-    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch (_) { }
+    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch(_) {}
     return [];
   }
 }
 
-function safeJoin(arr, sep = ' | ') {
+function safeJoin(arr, sep=' | ') {
   try {
     if (Array.isArray(arr)) return arr.join(sep);
     if (arr && typeof arr === 'object') {
-      const vals = Object.values(arr).filter(v => typeof v === 'string');
+      const vals = Object.values(arr).filter(v=>typeof v==='string');
       return vals.join(sep);
     }
-    return String(arr || '');
+    return String(arr||'');
   } catch (_) { return ''; }
 }
 
@@ -352,7 +352,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
   const want = preferredName ? String(preferredName).trim() : '';
   let options = [];
   let attempts = 0;
-
+  
   // Try multiple times with increasing wait
   while (attempts < 5) {
     await sleep(500 + attempts * 300);
@@ -361,7 +361,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
     attempts++;
     logInfo(`${name}: waiting for options... attempt ${attempts}, found ${options.length}`);
   }
-
+  
   let idx = options.length ? matchOptionIndex(options, want) : -1;
   let filteredBy = '';
 
@@ -377,7 +377,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
         return JSON.stringify({ count: 0 });
       }`);
       logInfo(`${name}: portal check: ${portalCheck}`);
-    } catch (_) { }
+    } catch (_) {}
   }
 
   if (idx === -1) {
@@ -396,7 +396,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
             if (search) { await search.fill(${JSON.stringify(q)}); return 'ok'; }
             return 'no-search';
           }`);
-        } catch (_) { }
+        } catch (_) {}
       }
       await sleep(1000);
       options = listComboboxOptions();
@@ -425,15 +425,15 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
         idx = 0;
         logInfo(`${name}: recovered ${options.length} options via JS`);
       }
-    } catch (_) { }
+    } catch (_) {}
   }
 
   if (!options.length) {
     const snapshot = cli(['snapshot'], { allowFailure: true }).stdout || '';
     const body = bodyText().slice(0, 1000);
-    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Body has: ${body.slice(0, 500)}. Snapshot head: ${snapshot.slice(0, 400)}`);
+    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Body has: ${body.slice(0,500)}. Snapshot head: ${snapshot.slice(0, 400)}`);
   }
-
+  
   if (idx === -1) {
     // If preferred not found, take first available
     if (!want || want.trim() === '') {
@@ -445,7 +445,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
   }
 
   const chosen = options[idx];
-
+  
   // Try multiple ways to click
   let clicked = false;
   try {
@@ -471,9 +471,9 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
         return 'ok';
       }`);
       clicked = true;
-    } catch (_) { }
+    } catch (_) {}
   }
-
+  
   await sleep(800);
   logInfo(`${name} selected [${idx}]${filteredBy ? ` (filtered by ${JSON.stringify(filteredBy)})` : ''}: ${chosen.text}`);
   return { index: idx, text: chosen.text, innerHTML: chosen.html || '', optionsCount: options.length, options: options.map(o => o.text), filteredBy };
@@ -785,7 +785,7 @@ function fillTextareaByPlaceholder(placeholders, value) {
         logInfo(`filled textarea ${modalSel ? '(modal) ' : ''}placeholder=${JSON.stringify(p)}`);
         return p;
       }
-      tried.push(`${modalSel || 'global'}:${p}`);
+      tried.push(`${modalSel||'global'}:${p}`);
     }
   }
   // Fallback: any textarea inside modal
