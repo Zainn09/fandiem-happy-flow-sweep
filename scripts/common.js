@@ -126,18 +126,6 @@ function buildSweepTitle() {
 // ---- uploads: 3 strategies ----
 function listFileInputs() {
   try {
-<<<<<<< HEAD
-    const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('input[type="file"]')].map((el, i) => ({
-      index: i,
-      accept: el.getAttribute('accept') || '',
-      name: el.getAttribute('name') || '',
-      id: el.id || '',
-      multiple: !!el.multiple,
-      visible: (() => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()
-    })))`);
-    const parsed = JSON.parse(raw || '[]');
-    // Ensure always array - fix for inputs.map is not a function
-=======
     // Try multiple selectors and wait a bit for inputs to appear
     const raw = evalPage(`() => {
       const selectors = [
@@ -168,7 +156,6 @@ function listFileInputs() {
       })));
     }`);
     const parsed = JSON.parse(raw || '[]');
->>>>>>> efa86e92dfe49b04b7204fc84a410152fa21a309
     if (Array.isArray(parsed)) return parsed;
     if (parsed && typeof parsed === 'object') {
       const vals = Object.values(parsed);
@@ -176,16 +163,13 @@ function listFileInputs() {
     }
     return [];
   } catch (e) {
-    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch(_) {}
+    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch (_) { }
     return [];
   }
 }
 
-<<<<<<< HEAD
-=======
 // Removed waitForFileInputs with busy loop - use sleep in run.js loops instead
 
->>>>>>> efa86e92dfe49b04b7204fc84a410152fa21a309
 
 function dropFiles(target, absPaths) {
   try {
@@ -199,7 +183,7 @@ function dropFiles(target, absPaths) {
     try {
       const res = cli(['drop', target, ...absPaths.map(p => `--path=${p}`)], { allowFailure: true });
       if (res.code !== 0) {
-        throw new Error(`drop failed: ${res.stderr.slice(0,300) || res.stdout.slice(0,300)}`);
+        throw new Error(`drop failed: ${res.stderr.slice(0, 300) || res.stdout.slice(0, 300)}`);
       }
       return res;
     } catch (e2) {
@@ -218,7 +202,7 @@ function uploadFiles(absPaths) {
     try {
       const res = cli(['upload', ...absPaths], { allowFailure: true });
       if (res.code !== 0) {
-        throw new Error(`upload failed: ${res.stderr.slice(0,300) || res.stdout.slice(0,300)}`);
+        throw new Error(`upload failed: ${res.stderr.slice(0, 300) || res.stdout.slice(0, 300)}`);
       }
       return res;
     } catch (e2) {
@@ -292,19 +276,19 @@ function captureVisibleErrors() {
     }
     return [];
   } catch (e) {
-    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch(_) {}
+    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch (_) { }
     return [];
   }
 }
 
-function safeJoin(arr, sep=' | ') {
+function safeJoin(arr, sep = ' | ') {
   try {
     if (Array.isArray(arr)) return arr.join(sep);
     if (arr && typeof arr === 'object') {
-      const vals = Object.values(arr).filter(v=>typeof v==='string');
+      const vals = Object.values(arr).filter(v => typeof v === 'string');
       return vals.join(sep);
     }
-    return String(arr||'');
+    return String(arr || '');
   } catch (_) { return ''; }
 }
 
@@ -369,7 +353,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
   const want = preferredName ? String(preferredName).trim() : '';
   let options = [];
   let attempts = 0;
-  
+
   // Try multiple times with increasing wait
   while (attempts < 5) {
     await sleep(500 + attempts * 300);
@@ -378,7 +362,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
     attempts++;
     logInfo(`${name}: waiting for options... attempt ${attempts}, found ${options.length}`);
   }
-  
+
   let idx = options.length ? matchOptionIndex(options, want) : -1;
   let filteredBy = '';
 
@@ -394,7 +378,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
         return JSON.stringify({ count: 0 });
       }`);
       logInfo(`${name}: portal check: ${portalCheck}`);
-    } catch (_) {}
+    } catch (_) { }
   }
 
   if (idx === -1) {
@@ -413,7 +397,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
             if (search) { await search.fill(${JSON.stringify(q)}); return 'ok'; }
             return 'no-search';
           }`);
-        } catch (_) {}
+        } catch (_) { }
       }
       await sleep(1000);
       options = listComboboxOptions();
@@ -442,15 +426,15 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
         idx = 0;
         logInfo(`${name}: recovered ${options.length} options via JS`);
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   if (!options.length) {
     const snapshot = cli(['snapshot'], { allowFailure: true }).stdout || '';
     const body = bodyText().slice(0, 1000);
-    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Body has: ${body.slice(0,500)}. Snapshot head: ${snapshot.slice(0, 400)}`);
+    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Body has: ${body.slice(0, 500)}. Snapshot head: ${snapshot.slice(0, 400)}`);
   }
-  
+
   if (idx === -1) {
     // If preferred not found, take first available
     if (!want || want.trim() === '') {
@@ -462,7 +446,7 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
   }
 
   const chosen = options[idx];
-  
+
   // Try multiple ways to click
   let clicked = false;
   try {
@@ -488,9 +472,9 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
         return 'ok';
       }`);
       clicked = true;
-    } catch (_) {}
+    } catch (_) { }
   }
-  
+
   await sleep(800);
   logInfo(`${name} selected [${idx}]${filteredBy ? ` (filtered by ${JSON.stringify(filteredBy)})` : ''}: ${chosen.text}`);
   return { index: idx, text: chosen.text, innerHTML: chosen.html || '', optionsCount: options.length, options: options.map(o => o.text), filteredBy };
@@ -802,7 +786,7 @@ function fillTextareaByPlaceholder(placeholders, value) {
         logInfo(`filled textarea ${modalSel ? '(modal) ' : ''}placeholder=${JSON.stringify(p)}`);
         return p;
       }
-      tried.push(`${modalSel||'global'}:${p}`);
+      tried.push(`${modalSel || 'global'}:${p}`);
     }
   }
   // Fallback: any textarea inside modal
