@@ -51,6 +51,7 @@ async function ensurePlaywrightAttached() {
         windowsHide: false
       });
       child.unref();
+      logInfo(`Spawned attach process: ${attachScript}`);
     } catch (e) {
       logWarn(`Failed to spawn attach.js: ${e.message}`);
     }
@@ -128,26 +129,28 @@ async function ensurePlaywrightAttached() {
     }
     console.log(`  Waiting for Playwright session connection (click 'Allow & select' in Chrome)... [${attempts}]`);
 
-    // After every 5 attempts (~10s) re-open permission tab
+    // Every 5 attempts (~10 seconds) re-open the permission tab by re-launching attach.js
+    // This is the same method that worked before - it opens chrome-extension://.../connect.html?mcpRelayUrl=... with correct params
     if (attempts % 5 === 0) {
       const elapsed = Math.round((Date.now() - (deadline - 60000)) / 1000);
       console.log('');
       console.log('------------------------------------------------------------------');
-      console.log(`Still not attached after ${elapsed}s / ${attempts} checks. Re-opening permission tab...`);
-      console.log("Please check Chrome - a new tab should have opened. Click 'Allow & select'.");
+      console.log(`Still not attached after ${elapsed}s / ${attempts} checks. Re-opening Allow & Select tab...`);
+      console.log("If you missed it, a new Welcome tab should appear. Please click 'Allow & select'.");
       console.log('------------------------------------------------------------------');
       console.log('');
-      launchAttach(`Re-launching attach process after ${attempts} attempts (${elapsed}s)...`);
+      launchAttach(`Re-launching attach process after ${attempts} attempts (${elapsed}s) - this will open the Allow & Select tab with mcpRelayUrl param`);
     }
   }
   throw new Error(
     'Could not attach Playwright to the existing Chrome profile within 60s.\n' +
     "Make sure the Playwright extension is installed and you click 'Allow & select' when prompted,\n" +
     'or configure extensionToken in config.json / PLAYWRIGHT_MCP_EXTENSION_TOKEN.\n' +
-    'The code now re-opens the permission tab every 10s automatically.'
+    'The code now re-opens the Allow & Select tab every 10s automatically via attach.js (with correct mcpRelayUrl).'
   );
 }
 
+// ---------------------------------------------------------------- data ---
 // ---------------------------------------------------------------- data ---
 const isDryRun = process.argv.includes('--dry-run');
 function previewTitle() {
