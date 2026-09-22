@@ -2307,3 +2307,13 @@ main();
 // - If you see this, you have latest with Partners fix
 // ==============================================================================
 
+// ==============================================================================
+// LATEST FILE MARKER - UPDATE 4 - TALENT DROPDOWN RANDOM SELECT
+// Date: 2026-09-22T18:38:47.446278
+// User request: for talent partners it is the dropdown with options just select any random
+// Screenshot shows: Search brands... with list 3OH!3, 5B ARTISTS, 5 Seconds of Summer, etc.
+// Fix: selectCombobox now selects random from first 10 options when no preferred, improved portal detection for divs with @ symbol, clears search to show all, tries multiple click methods including text-based
+// Previous: 01 PASS Campaigns, 02 PASS Gallery (all via drop), 03 FAIL Partners
+// This should make Partners PASS by selecting random talent like 5B ARTISTS
+// ==============================================================================
+

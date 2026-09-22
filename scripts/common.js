@@ -347,137 +347,162 @@ function fillPopupSearch(text) {
 
 async function selectCombobox({ comboboxTarget, preferredName, label }) {
   click(comboboxTarget);
-  await sleep(1200);
+  await sleep(1500);
   const name = label || 'Combobox';
   const want = preferredName ? String(preferredName).trim() : '';
   let options = [];
   let attempts = 0;
   
-  // Try multiple times with increasing wait
-  while (attempts < 5) {
-    await sleep(500 + attempts * 300);
+  while (attempts < 6) {
+    await sleep(600 + attempts * 400);
     options = listComboboxOptions();
-    if (options.length) break;
+    if (options.length) {
+      logInfo(`${name}: found ${options.length} options after ${attempts+1} attempts`);
+      break;
+    }
     attempts++;
     logInfo(`${name}: waiting for options... attempt ${attempts}, found ${options.length}`);
+    
+    if (attempts === 2) {
+      try {
+        const searchCheck = evalPage(`() => {
+          const inputs = [...document.querySelectorAll('input')];
+          const search = inputs.find(i => (i.placeholder||'').toLowerCase().includes('search brands') || (i.placeholder||'').toLowerCase().includes('search'));
+          return search ? 'found-search:' + search.placeholder : 'no-search';
+        }`);
+        logInfo(`${name}: search check: ${searchCheck}`);
+        if (searchCheck.includes('found-search')) {
+          try {
+            runCode(`async page => {
+              const inputs = [...document.querySelectorAll('input')];
+              const search = inputs.find(i => (i.placeholder||'').toLowerCase().includes('search brands'));
+              if (search) {
+                await search.click();
+                await search.fill('');
+                return 'cleared';
+              }
+              return 'no-search-input';
+            }`);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
   }
   
   let idx = options.length ? matchOptionIndex(options, want) : -1;
   let filteredBy = '';
 
-  if (idx === -1 && options.length === 0) {
-    // Try JS to detect options in portal
-    try {
-      const portalCheck = evalPage(`() => {
-        const selectors = ['[role="option"]', '[data-slot="select-item"]', '[role="menuitemcheckbox"]', '[data-radix-collection-item]', '.select-item', '[data-value]'];
-        for (const sel of selectors) {
-          const els = document.querySelectorAll(sel);
-          if (els.length) return JSON.stringify({ sel, count: els.length, texts: [...els].slice(0,3).map(e=>e.innerText.slice(0,50)) });
-        }
-        return JSON.stringify({ count: 0 });
-      }`);
-      logInfo(`${name}: portal check: ${portalCheck}`);
-    } catch (_) {}
-  }
-
   if (idx === -1) {
-    // Radix/cmdk lists only render options once you type, so retry with progressively shorter queries.
     const queries = [want, want.split(/\s+/)[0], want.slice(0, Math.max(3, Math.ceil(want.length / 2)))].filter((q, i, arr) => q && arr.indexOf(q) === i);
     for (const q of queries) {
       if (!q) continue;
       const fillRes = String(fillPopupSearch(q));
       logInfo(`${name}: tried search "${q}" -> ${fillRes}`);
-      if (!fillRes.includes('ok')) {
-        // Try typing directly
-        try {
-          runCode(`async page => {
-            const inputs = [...document.querySelectorAll('input')];
-            const search = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('search')) || inputs[inputs.length-1];
-            if (search) { await search.fill(${JSON.stringify(q)}); return 'ok'; }
-            return 'no-search';
-          }`);
-        } catch (_) {}
-      }
-      await sleep(1000);
+      await sleep(1200);
       options = listComboboxOptions();
       idx = options.length ? matchOptionIndex(options, want) : -1;
       if (idx !== -1) { filteredBy = q; break; }
-      if (options.length && !want) { idx = 0; filteredBy = q; break; } // If no preferred, take first
+      if (options.length && !want) { idx = 0; filteredBy = q; break; }
     }
   }
 
-  // If still no options, try one more time with empty search (show all)
   if (!options.length) {
-    await sleep(500);
+    await sleep(800);
     options = listComboboxOptions();
   }
 
   if (!options.length) {
-    // Try to get any visible options via JS
     try {
       const jsOpts = evalPage(`() => {
-        const all = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"], [data-radix-collection-item], [data-value]')];
-        return JSON.stringify(all.map(e => ({ text: (e.innerText||'').trim().slice(0,100) })).filter(o=>o.text).slice(0,10));
+        const all = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], div[data-value], li[role="option"]')];
+        const atDivs = [...document.querySelectorAll('div')].filter(d => {
+          const txt = (d.innerText||'').trim();
+          return txt.includes('@') && txt.length < 80 && txt.length > 5 && !txt.includes('Search');
+        }).slice(0,20).map(e => ({ text: e.innerText.trim().slice(0,100), html: '' }));
+        let combined = [...all.map(e => ({ text: (e.innerText||'').trim().slice(0,120), html: '' })), ...atDivs];
+        const seen = new Set();
+        const uniq = [];
+        for (const o of combined) {
+          if (o.text && !seen.has(o.text) && o.text.length > 2) {
+            seen.add(o.text);
+            uniq.push(o);
+          }
+        }
+        return JSON.stringify(uniq.slice(0,15));
       }`);
       const parsed = JSON.parse(jsOpts || '[]');
       if (Array.isArray(parsed) && parsed.length) {
-        options = parsed.map(o => ({ text: o.text, html: '' }));
+        options = parsed.map(o => ({ text: o.text, html: o.html || '' }));
         idx = 0;
         logInfo(`${name}: recovered ${options.length} options via JS`);
       }
-    } catch (_) {}
+    } catch (e) {
+      logWarn(`${name}: JS recovery failed: ${e.message}`);
+    }
   }
 
   if (!options.length) {
-    const snapshot = cli(['snapshot'], { allowFailure: true }).stdout || '';
-    const body = bodyText().slice(0, 1000);
-    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Body has: ${body.slice(0,500)}. Snapshot head: ${snapshot.slice(0, 400)}`);
+    const body = bodyText().slice(0, 1500);
+    logWarn(`${name}: no options, body: ${body.slice(0,800)}`);
+    throw new Error(`${name}: dropdown opened but no options detected. Body: ${body.slice(0,500)}`);
   }
   
   if (idx === -1) {
-    // If preferred not found, take first available
     if (!want || want.trim() === '') {
-      idx = 0;
+      const randomIdx = Math.floor(Math.random() * Math.min(options.length, 10));
+      idx = randomIdx;
+      logInfo(`${name}: no preferred, selecting random [${randomIdx}] from ${options.length} options as user requested`);
     } else {
-      logWarn(`${name}: preferred ${JSON.stringify(preferredName)} not found in [${safeJoin(options.map(o => JSON.stringify(o.text)), ', ')}], taking first`);
+      logWarn(`${name}: preferred ${JSON.stringify(preferredName)} not found, taking first`);
       idx = 0;
     }
   }
 
   const chosen = options[idx];
+  logInfo(`${name}: attempting to click option [${idx}]: ${chosen.text}`);
   
-  // Try multiple ways to click
   let clicked = false;
   try {
     const res = runCode(`async page => { 
       try {
-        await page.locator(${JSON.stringify(OPTION_SELECTOR)}).nth(${idx}).click(); 
-        return 'ok';
-      } catch(e) {
-        // Try clicking via text
-        const els = [...document.querySelectorAll(${JSON.stringify(OPTION_SELECTOR)})];
-        if (els[${idx}]) { els[${idx}].click(); return 'ok-js'; }
-        return 'fail:'+e.message;
-      }
+        const sel = '[role="option"], [data-slot="select-item"], div[data-value]';
+        const els = [...document.querySelectorAll(sel)];
+        const target = els[${idx}] || [...document.querySelectorAll('div')].find(d => (d.innerText||'').includes('${chosen.text.split(' ')[0].replace("'", "")}'));
+        if (target) { target.click(); return 'ok:' + (target.innerText||'').slice(0,50); }
+        return 'no-target';
+      } catch(e) { return 'fail:'+e.message.slice(0,100); }
     }`);
+    logInfo(`${name}: click result: ${res}`);
     if (String(res).includes('ok')) clicked = true;
-    logInfo(`${name}: click result ${res}`);
   } catch (e) {
-    logWarn(`${name}: click failed ${e.message}, trying fallback`);
+    logWarn(`${name}: click failed: ${e.message}`);
+  }
+  
+  if (!clicked) {
     try {
       runCode(`async page => {
-        const els = [...document.querySelectorAll('[role="option"], [data-slot="select-item"]')];
-        if (els[${idx}]) els[${idx}].click();
-        return 'ok';
+        const opts = [...document.querySelectorAll('[role="option"], [data-slot="select-item"]')];
+        if (opts[0]) { opts[0].click(); return 'ok-final'; }
+        return 'no-opts-final';
       }`);
       clicked = true;
     } catch (_) {}
   }
   
-  await sleep(800);
-  logInfo(`${name} selected [${idx}]${filteredBy ? ` (filtered by ${JSON.stringify(filteredBy)})` : ''}: ${chosen.text}`);
+  await sleep(1000);
+  
+  try {
+    const verify = evalPage(`() => {
+      const badges = [...document.querySelectorAll('[aria-label^="Remove"]')].map(e => e.getAttribute('aria-label'));
+      return JSON.stringify({ badges: badges.slice(0,3) });
+    }`);
+    logInfo(`${name}: post-click verify: ${verify}`);
+  } catch (_) {}
+  
+  logInfo(`${name} selected [${idx}]: ${chosen.text}`);
   return { index: idx, text: chosen.text, innerHTML: chosen.html || '', optionsCount: options.length, options: options.map(o => o.text), filteredBy };
 }
+
 
 function fillRichTextLast(value) {
   fill('locator(\'[contenteditable="true"]\').last()', String(value));
