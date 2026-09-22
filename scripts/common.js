@@ -569,20 +569,54 @@ function normalizeCdnKey(url) {
 function fillTextareaByPlaceholder(placeholders, value) {
   const list = Array.isArray(placeholders) ? placeholders : [placeholders];
   const tried = [];
-  for (const p of list) {
-    const css = `textarea[placeholder=${JSON.stringify(p)}]`;
-    const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
-    if (r.code === 0) {
-      logInfo(`filled textarea placeholder=${JSON.stringify(p)}`);
-      return p;
+  const modalSelectors = ['[data-qa-modal="1"]', '[role="dialog"]', '[data-slot="dialog-content"]', ''];
+  for (const modalSel of modalSelectors) {
+    for (const p of list) {
+      const css = modalSel ? `${modalSel} textarea[placeholder=${JSON.stringify(p)}]` : `textarea[placeholder=${JSON.stringify(p)}]`;
+      const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
+      if (r.code === 0) {
+        logInfo(`filled textarea ${modalSel ? '(modal) ' : ''}placeholder=${JSON.stringify(p)}`);
+        return p;
+      }
+      tried.push(`${modalSel||'global'}:${p}`);
     }
-    tried.push(p);
+  }
+  // Fallback: any textarea inside modal
+  for (const modalSel of ['[data-qa-modal="1"]', '[role="dialog"]']) {
+    const r = cli(['fill', `locator('${modalSel} textarea')`, String(value)], { allowFailure: true });
+    if (r.code === 0) {
+      logInfo(`filled textarea via ${modalSel} textarea fallback`);
+      return '(modal textarea)';
+    }
   }
   throw new Error(`No textarea matched placeholders ${JSON.stringify(tried)}`);
 }
 
 function fillRichTextAny(placeholders, value) {
   const list = (Array.isArray(placeholders) ? placeholders : [placeholders]).filter(Boolean);
+  const modalSelectors = [
+    '[data-qa-modal="1"]',
+    '[role="dialog"]',
+    '[data-slot="dialog-content"]'
+  ];
+  // Try modal-scoped first (critical for Prize Details fix)
+  for (const modalSel of modalSelectors) {
+    for (const p of list) {
+      const css = `${modalSel} [data-placeholder=${JSON.stringify(p)}]`;
+      const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
+      if (r.code === 0) {
+        logInfo(`filled rich text (modal ${modalSel}) data-placeholder=${JSON.stringify(p)}`);
+        return p;
+      }
+    }
+    // also try any contenteditable inside modal without placeholder filter
+    const rAny = cli(['fill', `locator('${modalSel} [contenteditable="true"]')`, String(value)], { allowFailure: true });
+    if (rAny.code === 0) {
+      logInfo(`filled rich text via modal ${modalSel} [contenteditable]`);
+      return '(modal contenteditable)';
+    }
+  }
+  // Global placeholders
   for (const p of list) {
     const css = `[data-placeholder=${JSON.stringify(p)}]`;
     const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
@@ -596,6 +630,37 @@ function fillRichTextAny(placeholders, value) {
       logInfo(`typed rich text data-placeholder=${JSON.stringify(p)}`);
       return p;
     }
+  }
+  // JS fallback: execCommand inside modal or last contenteditable
+  try {
+    const jsRes = runCode(`async page => {
+      const val = ${JSON.stringify(String(value))};
+      const modals = [document.querySelector('[data-qa-modal="1"]'), document.querySelector('[role="dialog"]'), document.querySelector('[data-slot="dialog-content"]')].filter(Boolean);
+      for (const modal of modals) {
+        const el = modal.querySelector('[contenteditable="true"]');
+        if (el) {
+          el.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, val);
+          if (!el.innerText.includes(val.slice(0,10))) { el.innerText = val; el.dispatchEvent(new Event('input',{bubbles:true})); }
+          return 'ok:modal:' + el.innerText.slice(0,30);
+        }
+      }
+      const last = [...document.querySelectorAll('[contenteditable="true"]')].pop();
+      if (last) {
+        last.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, val);
+        return 'ok:last:' + last.innerText.slice(0,30);
+      }
+      return 'no-editable';
+    }`);
+    if (String(jsRes).startsWith('ok')) {
+      logInfo(`filled rich text via JS: ${jsRes}`);
+      return '(js ' + jsRes + ')';
+    }
+  } catch (e) {
+    logWarn(`JS rich text fallback failed: ${e.message}`);
   }
   fillRichTextLast(value);
   logInfo('filled rich text via last contenteditable fallback');
