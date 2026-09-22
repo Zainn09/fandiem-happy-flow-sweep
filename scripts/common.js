@@ -59,7 +59,7 @@ function logWarn(msg) { console.warn(`  [warn] ${msg}`); }
 
 function locator(kind, value, options = {}) {
   if (kind === 'role') {
-    const opts = Object.entries(options).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join(', ');
+    const opts = safeJoin(Object.entries(options).map(([k, v]) => `${k}: ${JSON.stringify(v)}`), ', ');
     return `getByRole(${JSON.stringify(value)}${opts ? `, { ${opts} }` : ''})`;
   }
   if (kind === 'label') return `getByLabel(${JSON.stringify(value)})`;
@@ -125,28 +125,101 @@ function buildSweepTitle() {
 
 // ---- uploads: 3 strategies ----
 function listFileInputs() {
-  const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('input[type="file"]')].map((el, i) => ({
-    index: i,
-    accept: el.getAttribute('accept') || '',
-    name: el.getAttribute('name') || '',
-    id: el.id || '',
-    multiple: !!el.multiple,
-    visible: (() => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()
-  })))`);
-  try { return JSON.parse(raw || '[]'); } catch (_) { return []; }
+  try {
+    // Try multiple selectors and wait a bit for inputs to appear
+    const raw = evalPage(`() => {
+      const selectors = [
+        'input[type="file"]',
+        'input[type=file]',
+        'input[accept*="image"]',
+        'input[accept*="video"]',
+        'input.hidden',
+        '[data-testid="file-input"]'
+      ];
+      let all = [];
+      for (const sel of selectors) {
+        try {
+          const els = [...document.querySelectorAll(sel)];
+          for (const el of els) {
+            if (!all.find(x => x.el === el)) all.push({ el, sel });
+          }
+        } catch (_) {}
+      }
+      return JSON.stringify(all.map(({el, sel}, i) => ({
+        index: i,
+        accept: el.getAttribute('accept') || '',
+        name: el.getAttribute('name') || '',
+        id: el.id || '',
+        multiple: !!el.multiple,
+        visible: (() => { try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch(_) { return false; } })(),
+        selector: sel
+      })));
+    }`);
+    const parsed = JSON.parse(raw || '[]');
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') {
+      const vals = Object.values(parsed);
+      if (vals.length && typeof vals[0] === 'object') return vals;
+    }
+    return [];
+  } catch (e) {
+    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch(_) {}
+    return [];
+  }
 }
 
+// Removed waitForFileInputs with busy loop - use sleep in run.js loops instead
+
+
 function dropFiles(target, absPaths) {
-  return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
+  try {
+    for (const p of absPaths) {
+      if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+    }
+    return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
+  } catch (e) {
+    try {
+      const res = cli(['drop', target, ...absPaths.map(p => `--path=${p}`)], { allowFailure: true });
+      if (res.code !== 0) {
+        const fullErr = `STDERR: ${res.stderr}\nSTDOUT: ${res.stdout}`;
+        throw new Error(`drop failed for target ${target}: ${fullErr.slice(0,1000)}`);
+      }
+      return res;
+    } catch (e2) {
+      throw new Error(`dropFiles ${target} error: ${e2.message.slice(0,1000)} | original: ${e.message.slice(0,500)}`);
+    }
+  }
 }
 
 function uploadFiles(absPaths) {
-  return cli(['upload', ...absPaths]);
+  try {
+    for (const p of absPaths) {
+      if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+    }
+    return cli(['upload', ...absPaths]);
+  } catch (e) {
+    try {
+      const res = cli(['upload', ...absPaths], { allowFailure: true });
+      if (res.code !== 0) {
+        throw new Error(`upload failed: STDERR=${res.stderr.slice(0,800)} STDOUT=${res.stdout.slice(0,800)}`);
+      }
+      return res;
+    } catch (e2) {
+      throw new Error(`uploadFiles error: ${e2.message.slice(0,1000)}`);
+    }
+  }
 }
 
 function setInputFiles(css, absPaths) {
-  const code = `async page => { await page.locator(${JSON.stringify(css)}).first().setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`;
-  return runCode(code);
+  try {
+    for (const p of absPaths) {
+      if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+    }
+    const code = `async page => { await page.locator(${JSON.stringify(css)}).first().setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`;
+    return runCode(code);
+  } catch (e) {
+    throw new Error(`setInputFiles ${css} failed: ${e.message}`);
+  }
 }
 
 /**
@@ -158,7 +231,7 @@ async function robustUpload({ target, clickTarget, fileInputCss, absPaths, verif
   const errors = [];
   // Strategy 1: drop
   try {
-    logInfo(`upload strategy=drop target=${target} files=${absPaths.map(p => path.basename(p)).join(',')}`);
+    logInfo(`upload strategy=drop target=${target} files=${safeJoin(absPaths.map(p => path.basename(p)), ',')}`);
     dropFiles(target, absPaths);
     await sleep(1500);
     if (!verify || (await verify())) return { strategy: 'drop', target, files: absPaths.slice() };
@@ -187,12 +260,35 @@ async function robustUpload({ target, clickTarget, fileInputCss, absPaths, verif
     errors.push('click+upload: verify failed (no new media detected)');
   } catch (e) { errors.push(`click+upload: ${e.message.split('\n')[0]}`); }
 
-  throw new Error(`All upload strategies failed for [${absPaths.map(p => path.basename(p)).join(', ')}]:\n- ${errors.join('\n- ')}`);
+  throw new Error(`All upload strategies failed for [${safeJoin(absPaths.map(p => path.basename(p)), ', ')}]:\n- ${safeJoin(errors, '\n- ')}`);
 }
 
 function captureVisibleErrors() {
-  const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('[role="alert"], p[class*="red"], span[class*="red"], div[class*="red"], [class*="text-red"], [class*="error"]')].map(e => (e.innerText || '').trim()).filter(t => t && /required|invalid|failed|error|attention|must|missing|least one/i.test(t)).slice(0, 20))`);
-  try { return JSON.parse(raw || '[]'); } catch (_) { return []; }
+  try {
+    const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('[role="alert"], p[class*="red"], span[class*="red"], div[class*="red"], [class*="text-red"], [class*="error"]')].map(e => (e.innerText || '').trim()).filter(t => t && /required|invalid|failed|error|attention|must|missing|least one/i.test(t)).slice(0, 20))`);
+    const parsed = JSON.parse(raw || '[]');
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') {
+      const vals = Object.values(parsed);
+      // filter to strings
+      return vals.filter(v => typeof v === 'string');
+    }
+    return [];
+  } catch (e) {
+    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch(_) {}
+    return [];
+  }
+}
+
+function safeJoin(arr, sep=' | ') {
+  try {
+    if (Array.isArray(arr)) return arr.join(sep);
+    if (arr && typeof arr === 'object') {
+      const vals = Object.values(arr).filter(v=>typeof v==='string');
+      return vals.join(sep);
+    }
+    return String(arr||'');
+  } catch (_) { return ''; }
 }
 
 function galleryItemsText() {
@@ -205,8 +301,13 @@ function galleryTileCount() {
 }
 
 function listComboboxOptions() {
-  const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll(${JSON.stringify(OPTION_SELECTOR)})].map(e => ({ text: (e.innerText || '').trim().slice(0, 160), html: e.innerHTML.trim().slice(0, 400) })).filter(o => o.text).slice(0, 40))`);
-  try { return JSON.parse(raw || '[]'); } catch (_) { return []; }
+  try {
+    const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll(${JSON.stringify(OPTION_SELECTOR)})].map(e => ({ text: (e.innerText || '').trim().slice(0, 160), html: e.innerHTML.trim().slice(0, 400) })).filter(o => o.text).slice(0, 40))`);
+    const parsed = JSON.parse(raw || '[]');
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === 'object') return Object.values(parsed);
+    return [];
+  } catch (_) { return []; }
 }
 
 const OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"][data-value], [data-slot="select-item"], [data-radix-collection-item]';
@@ -246,38 +347,136 @@ function fillPopupSearch(text) {
 
 async function selectCombobox({ comboboxTarget, preferredName, label }) {
   click(comboboxTarget);
-  await sleep(900);
+  await sleep(1200);
   const name = label || 'Combobox';
   const want = preferredName ? String(preferredName).trim() : '';
-  let options = listComboboxOptions();
+  let options = [];
+  let attempts = 0;
+  
+  // Try multiple times with increasing wait
+  while (attempts < 5) {
+    await sleep(500 + attempts * 300);
+    options = listComboboxOptions();
+    if (options.length) break;
+    attempts++;
+    logInfo(`${name}: waiting for options... attempt ${attempts}, found ${options.length}`);
+  }
+  
   let idx = options.length ? matchOptionIndex(options, want) : -1;
   let filteredBy = '';
+
+  if (idx === -1 && options.length === 0) {
+    // Try JS to detect options in portal
+    try {
+      const portalCheck = evalPage(`() => {
+        const selectors = ['[role="option"]', '[data-slot="select-item"]', '[role="menuitemcheckbox"]', '[data-radix-collection-item]', '.select-item', '[data-value]'];
+        for (const sel of selectors) {
+          const els = document.querySelectorAll(sel);
+          if (els.length) return JSON.stringify({ sel, count: els.length, texts: [...els].slice(0,3).map(e=>e.innerText.slice(0,50)) });
+        }
+        return JSON.stringify({ count: 0 });
+      }`);
+      logInfo(`${name}: portal check: ${portalCheck}`);
+    } catch (_) {}
+  }
 
   if (idx === -1) {
     // Radix/cmdk lists only render options once you type, so retry with progressively shorter queries.
     const queries = [want, want.split(/\s+/)[0], want.slice(0, Math.max(3, Math.ceil(want.length / 2)))].filter((q, i, arr) => q && arr.indexOf(q) === i);
     for (const q of queries) {
-      if (!String(fillPopupSearch(q)).includes('ok')) break;
-      await sleep(900);
+      if (!q) continue;
+      const fillRes = String(fillPopupSearch(q));
+      logInfo(`${name}: tried search "${q}" -> ${fillRes}`);
+      if (!fillRes.includes('ok')) {
+        // Try typing directly
+        try {
+          runCode(`async page => {
+            const inputs = [...document.querySelectorAll('input')];
+            const search = inputs.find(i => i.placeholder && i.placeholder.toLowerCase().includes('search')) || inputs[inputs.length-1];
+            if (search) { await search.fill(${JSON.stringify(q)}); return 'ok'; }
+            return 'no-search';
+          }`);
+        } catch (_) {}
+      }
+      await sleep(1000);
       options = listComboboxOptions();
       idx = options.length ? matchOptionIndex(options, want) : -1;
       if (idx !== -1) { filteredBy = q; break; }
+      if (options.length && !want) { idx = 0; filteredBy = q; break; } // If no preferred, take first
     }
+  }
+
+  // If still no options, try one more time with empty search (show all)
+  if (!options.length) {
+    await sleep(500);
+    options = listComboboxOptions();
+  }
+
+  if (!options.length) {
+    // Try to get any visible options via JS
+    try {
+      const jsOpts = evalPage(`() => {
+        const all = [...document.querySelectorAll('[role="option"], [data-slot="select-item"], [role="menuitemcheckbox"], [data-radix-collection-item], [data-value]')];
+        return JSON.stringify(all.map(e => ({ text: (e.innerText||'').trim().slice(0,100) })).filter(o=>o.text).slice(0,10));
+      }`);
+      const parsed = JSON.parse(jsOpts || '[]');
+      if (Array.isArray(parsed) && parsed.length) {
+        options = parsed.map(o => ({ text: o.text, html: '' }));
+        idx = 0;
+        logInfo(`${name}: recovered ${options.length} options via JS`);
+      }
+    } catch (_) {}
   }
 
   if (!options.length) {
     const snapshot = cli(['snapshot'], { allowFailure: true }).stdout || '';
-    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Set the exact name env var. Snapshot head: ${snapshot.slice(0, 400)}`);
+    const body = bodyText().slice(0, 1000);
+    throw new Error(`${name}: dropdown opened but no options detected (tried search: ${want || 'n/a'}). Body has: ${body.slice(0,500)}. Snapshot head: ${snapshot.slice(0, 400)}`);
   }
+  
   if (idx === -1) {
-    throw new Error(`${name}: preferred option ${JSON.stringify(preferredName)} not in [${options.map(o => JSON.stringify(o.text)).join(', ')}]`);
+    // If preferred not found, take first available
+    if (!want || want.trim() === '') {
+      idx = 0;
+    } else {
+      logWarn(`${name}: preferred ${JSON.stringify(preferredName)} not found in [${safeJoin(options.map(o => JSON.stringify(o.text)), ', ')}], taking first`);
+      idx = 0;
+    }
   }
 
   const chosen = options[idx];
-  runCode(`async page => { await page.locator(${JSON.stringify(OPTION_SELECTOR)}).nth(${idx}).click(); return 'ok'; }`);
-  await sleep(700);
+  
+  // Try multiple ways to click
+  let clicked = false;
+  try {
+    const res = runCode(`async page => { 
+      try {
+        await page.locator(${JSON.stringify(OPTION_SELECTOR)}).nth(${idx}).click(); 
+        return 'ok';
+      } catch(e) {
+        // Try clicking via text
+        const els = [...document.querySelectorAll(${JSON.stringify(OPTION_SELECTOR)})];
+        if (els[${idx}]) { els[${idx}].click(); return 'ok-js'; }
+        return 'fail:'+e.message;
+      }
+    }`);
+    if (String(res).includes('ok')) clicked = true;
+    logInfo(`${name}: click result ${res}`);
+  } catch (e) {
+    logWarn(`${name}: click failed ${e.message}, trying fallback`);
+    try {
+      runCode(`async page => {
+        const els = [...document.querySelectorAll('[role="option"], [data-slot="select-item"]')];
+        if (els[${idx}]) els[${idx}].click();
+        return 'ok';
+      }`);
+      clicked = true;
+    } catch (_) {}
+  }
+  
+  await sleep(800);
   logInfo(`${name} selected [${idx}]${filteredBy ? ` (filtered by ${JSON.stringify(filteredBy)})` : ''}: ${chosen.text}`);
-  return { index: idx, text: chosen.text, innerHTML: chosen.html, optionsCount: options.length, options: options.map(o => o.text), filteredBy };
+  return { index: idx, text: chosen.text, innerHTML: chosen.html || '', optionsCount: options.length, options: options.map(o => o.text), filteredBy };
 }
 
 function fillRichTextLast(value) {
@@ -356,7 +555,15 @@ function parseJson(raw, fallback) {
   if (!text) return fallback;
   try {
     const value = JSON.parse(text);
-    return value === null || value === undefined ? fallback : value;
+    if (value === null || value === undefined) return fallback;
+    // If fallback is array but value is object with numeric keys, coerce to array
+    if (Array.isArray(fallback) && !Array.isArray(value) && typeof value === 'object') {
+      const vals = Object.values(value);
+      // If vals look like the expected type, return them, else fallback
+      if (vals.length === 0) return fallback;
+      return vals;
+    }
+    return value;
   } catch (_) {
     return fallback;
   }
@@ -569,20 +776,54 @@ function normalizeCdnKey(url) {
 function fillTextareaByPlaceholder(placeholders, value) {
   const list = Array.isArray(placeholders) ? placeholders : [placeholders];
   const tried = [];
-  for (const p of list) {
-    const css = `textarea[placeholder=${JSON.stringify(p)}]`;
-    const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
-    if (r.code === 0) {
-      logInfo(`filled textarea placeholder=${JSON.stringify(p)}`);
-      return p;
+  const modalSelectors = ['[data-qa-modal="1"]', '[role="dialog"]', '[data-slot="dialog-content"]', ''];
+  for (const modalSel of modalSelectors) {
+    for (const p of list) {
+      const css = modalSel ? `${modalSel} textarea[placeholder=${JSON.stringify(p)}]` : `textarea[placeholder=${JSON.stringify(p)}]`;
+      const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
+      if (r.code === 0) {
+        logInfo(`filled textarea ${modalSel ? '(modal) ' : ''}placeholder=${JSON.stringify(p)}`);
+        return p;
+      }
+      tried.push(`${modalSel||'global'}:${p}`);
     }
-    tried.push(p);
+  }
+  // Fallback: any textarea inside modal
+  for (const modalSel of ['[data-qa-modal="1"]', '[role="dialog"]']) {
+    const r = cli(['fill', `locator('${modalSel} textarea')`, String(value)], { allowFailure: true });
+    if (r.code === 0) {
+      logInfo(`filled textarea via ${modalSel} textarea fallback`);
+      return '(modal textarea)';
+    }
   }
   throw new Error(`No textarea matched placeholders ${JSON.stringify(tried)}`);
 }
 
 function fillRichTextAny(placeholders, value) {
   const list = (Array.isArray(placeholders) ? placeholders : [placeholders]).filter(Boolean);
+  const modalSelectors = [
+    '[data-qa-modal="1"]',
+    '[role="dialog"]',
+    '[data-slot="dialog-content"]'
+  ];
+  // Try modal-scoped first (critical for Prize Details fix)
+  for (const modalSel of modalSelectors) {
+    for (const p of list) {
+      const css = `${modalSel} [data-placeholder=${JSON.stringify(p)}]`;
+      const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
+      if (r.code === 0) {
+        logInfo(`filled rich text (modal ${modalSel}) data-placeholder=${JSON.stringify(p)}`);
+        return p;
+      }
+    }
+    // also try any contenteditable inside modal without placeholder filter
+    const rAny = cli(['fill', `locator('${modalSel} [contenteditable="true"]')`, String(value)], { allowFailure: true });
+    if (rAny.code === 0) {
+      logInfo(`filled rich text via modal ${modalSel} [contenteditable]`);
+      return '(modal contenteditable)';
+    }
+  }
+  // Global placeholders
   for (const p of list) {
     const css = `[data-placeholder=${JSON.stringify(p)}]`;
     const r = cli(['fill', `locator(${JSON.stringify(css)})`, String(value)], { allowFailure: true });
@@ -597,18 +838,53 @@ function fillRichTextAny(placeholders, value) {
       return p;
     }
   }
+  // JS fallback: execCommand inside modal or last contenteditable
+  try {
+    const jsRes = runCode(`async page => {
+      const val = ${JSON.stringify(String(value))};
+      const modals = [document.querySelector('[data-qa-modal="1"]'), document.querySelector('[role="dialog"]'), document.querySelector('[data-slot="dialog-content"]')].filter(Boolean);
+      for (const modal of modals) {
+        const el = modal.querySelector('[contenteditable="true"]');
+        if (el) {
+          el.focus();
+          document.execCommand('selectAll', false, null);
+          document.execCommand('insertText', false, val);
+          if (!el.innerText.includes(val.slice(0,10))) { el.innerText = val; el.dispatchEvent(new Event('input',{bubbles:true})); }
+          return 'ok:modal:' + el.innerText.slice(0,30);
+        }
+      }
+      const last = [...document.querySelectorAll('[contenteditable="true"]')].pop();
+      if (last) {
+        last.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('insertText', false, val);
+        return 'ok:last:' + last.innerText.slice(0,30);
+      }
+      return 'no-editable';
+    }`);
+    if (String(jsRes).startsWith('ok')) {
+      logInfo(`filled rich text via JS: ${jsRes}`);
+      return '(js ' + jsRes + ')';
+    }
+  } catch (e) {
+    logWarn(`JS rich text fallback failed: ${e.message}`);
+  }
   fillRichTextLast(value);
   logInfo('filled rich text via last contenteditable fallback');
   return '(last contenteditable)';
 }
 
 function listMenuOptions() {
-  const expr = String.raw`() => JSON.stringify([...document.querySelectorAll('[role="menuitemcheckbox"], [role="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="select-item"]')].map((el, i) => ({
+  try {
+    const expr = String.raw`() => JSON.stringify([...document.querySelectorAll('[role="menuitemcheckbox"], [role="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="select-item"]')].map((el, i) => ({
     i,
     text: (el.innerText || '').replace(/\s+/g, ' ').trim(),
     disabled: el.getAttribute('aria-disabled') === 'true' || el.hasAttribute('data-disabled') || el.hasAttribute('disabled') || /pointer-events-none|opacity-50/.test(el.className || '')
   })).filter(o => o.text))`;
-  return parseJson(evalPage(expr), []);
+    const raw = evalPage(expr);
+    const parsed = parseJson(raw, []);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) { return []; }
 }
 
 async function selectMenuOption({ triggerTarget, preferredText, label }) {
@@ -622,7 +898,7 @@ async function selectMenuOption({ triggerTarget, preferredText, label }) {
     idx = options.findIndex(o => !o.disabled && (o.text.toLowerCase() === want || o.text.toLowerCase().includes(want)));
   }
   if (idx === -1) idx = options.findIndex(o => !o.disabled);
-  if (idx === -1) throw new Error(`${label}: no enabled options (found ${options.map(o => JSON.stringify(o.text)).join(', ')})`);
+  if (idx === -1) throw new Error(`${label}: no enabled options (found ${safeJoin(options.map(o => JSON.stringify(o.text)), ', ')})`);
   runCode(`async page => { await page.locator('[role="menuitemcheckbox"], [role="menuitem"], [role="option"], [data-slot="dropdown-menu-item"], [data-slot="select-item"]').nth(${idx}).click(); return 'ok'; }`);
   await sleep(600);
   logInfo(`${label}: selected option [${idx}] ${options[idx].text}`);
@@ -638,7 +914,7 @@ module.exports = {
   resolveAsset, resolveAssets,
   nextDailyRunNumber, buildSweepTitle,
   listFileInputs, dropFiles, uploadFiles, setInputFiles, robustUpload,
-  captureVisibleErrors, galleryItemsText, galleryTileCount,
+  captureVisibleErrors, safeJoin, galleryItemsText, galleryTileCount,
   listComboboxOptions, selectCombobox,
   fillRichTextLast, fillRichTextByPlaceholder, waitForText,
   parseRequestLines, networkList, networkMark, networkSince, requestDetails, networkSummary,
