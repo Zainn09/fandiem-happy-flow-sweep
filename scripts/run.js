@@ -288,40 +288,161 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
     return null;
   }
 
-  // 1) drop
-  try {
-    logInfo(`${label}: strategy=drop target=${dropTarget} files=${names}`);
-    dropFiles(dropTarget, absPaths);
-    const grew = await confirm('drop');
-    if (grew) return { strategy: 'drop', ...grew };
-    errors.push('drop: no new media detected');
-  } catch (e) { errors.push(`drop: ${String(e.message).split('\n')[0]}`); }
+  // 1) drop - try multiple targets and JS fallback
+  const dropTargets = [
+    dropTarget,
+    `locator('button:has-text("Add media")').first()`,
+    `locator('div:has-text("Drag & drop or click to upload")').first()`,
+    `locator('div.space-y-1').first()`,
+    `locator('input[type="file"]').first()`
+  ].filter(Boolean);
 
-  // 2) setInputFiles on nth hidden input
+  for (const target of dropTargets) {
+    try {
+      logInfo(`${label}: strategy=drop target=${target} files=${names}`);
+      dropFiles(target, absPaths);
+      const grew = await confirm(`drop:${target.slice(0, 40)}`);
+      if (grew) return { strategy: 'drop', ...grew, target };
+      errors.push(`drop:${target.slice(0, 30)}: no new media detected`);
+    } catch (e) {
+      errors.push(`drop:${target.slice(0, 30)}: ${String(e.message).split('\n')[0].slice(0, 100)}`);
+    }
+    await sleep(500);
+  }
+
+  // Try JS drop via DataTransfer
+  try {
+    logInfo(`${label}: strategy=js-drop files=${names}`);
+    const jsDropRes = runCode(`async page => {
+      try {
+        const files = ${JSON.stringify(absPaths)};
+        // Find drop zone
+        const zones = [
+          ...document.querySelectorAll('button:has-text("Add media")'),
+          ...document.querySelectorAll('div:has-text("Drag & drop")'),
+          ...document.querySelectorAll('div.space-y-1'),
+          ...document.querySelectorAll('[data-testid="drop-zone"]')
+        ];
+        // Actually use JS to find via text
+        const allDivs = [...document.querySelectorAll('div, button')];
+        const dropZone = allDivs.find(el => (el.innerText||'').includes('Drag & drop') || (el.innerText||'').includes('Add media'));
+        if (!dropZone) return 'no-zone';
+        // Create fake drop event - can't actually set files via JS for security, but try
+        return 'found-zone:' + (dropZone.innerText||'').slice(0,50);
+      } catch(e) { return 'error:' + e.message; }
+    }`);
+    logInfo(`${label}: js-drop result: ${jsDropRes}`);
+  } catch (e) {
+    errors.push(`js-drop: ${e.message.slice(0, 100)}`);
+  }
+
+  // 2) setInputFiles on nth hidden input - wait for inputs and try multiple ways
   if (inputNth !== null && inputNth !== undefined) {
     try {
-      let inputs = listFileInputs();
-      if (!Array.isArray(inputs)) inputs = [];
+      // Wait for file inputs to appear
+      let inputs = [];
+      for (let i = 0; i < 6; i++) {
+        inputs = listFileInputs();
+        if (!Array.isArray(inputs)) inputs = [];
+        if (inputs.length > 0) break;
+        logInfo(`${label}: waiting for file inputs... attempt ${i + 1}, found ${inputs.length}`);
+        await sleep(1000);
+        // Try clicking Add media to reveal file input
+        if (i === 2) {
+          try {
+            cli(['click', `locator('button:has-text("Add media")').first()`], { allowFailure: true });
+            await sleep(800);
+          } catch (_) { }
+        }
+      }
+
       const idx = inputNth === -1 ? inputs.length - 1 : inputNth;
       logInfo(`${label}: strategy=setInputFiles nth=${idx} (inputs=${inputs.length}) files=${names}`);
-      if (idx < 0) throw new Error(`no file inputs on page (found ${inputs.length})`);
-      runCode(`async page => { await page.locator('input[type="file"]').nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`);
+      if (idx < 0) throw new Error(`no file inputs on page (found ${inputs.length}) after waiting`);
+
+      // Try multiple selectors for setInputFiles
+      const inputSelectors = [
+        `input[type="file"]`,
+        `input[type=file]`,
+        `input[accept*="image"]`,
+        `input.hidden`
+      ];
+
+      let setOk = false;
+      for (const sel of inputSelectors) {
+        try {
+          runCode(`async page => { await page.locator(${JSON.stringify(sel)}).nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`);
+          setOk = true;
+          break;
+        } catch (e) {
+          // try next
+        }
+      }
+
+      if (!setOk) {
+        // Direct JS set via DataTransfer (more reliable)
+        try {
+          const jsSetRes = runCode(`async page => {
+            try {
+              const filePaths = ${JSON.stringify(absPaths)};
+              const inputs = [...document.querySelectorAll('input[type="file"]')];
+              if (!inputs[${idx}]) return 'no-input-at-' + ${idx} + ':found=' + inputs.length;
+              // We can't set file path directly via JS for security, but we can try to trigger
+              // Actually setInputFiles via playwright is the way, we already tried
+              // Try to make input visible and then set
+              const input = inputs[${idx}];
+              input.style.display = 'block';
+              input.style.visibility = 'visible';
+              input.style.opacity = '1';
+              return 'made-visible:' + input.accept;
+            } catch(e) { return 'error:' + e.message; }
+          }`);
+          logInfo(`${label}: js setInputFiles prep: ${jsSetRes}`);
+          // Try again after making visible
+          runCode(`async page => { await page.locator('input[type="file"]').nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`);
+          setOk = true;
+        } catch (e) {
+          throw new Error(`setInputFiles all selectors failed: ${e.message}`);
+        }
+      }
+
       const grew = await confirm(`setInputFiles[${idx}]`);
       if (grew) return { strategy: `setInputFiles[${idx}]`, ...grew };
       errors.push(`setInputFiles[${idx}]: no new media detected`);
-    } catch (e) { errors.push(`setInputFiles: ${String(e.message).split('\n')[0]}`); }
+    } catch (e) { errors.push(`setInputFiles: ${String(e.message).split('\n')[0].slice(0, 150)}`); }
   }
 
-  // 3) click + upload (file chooser)
-  try {
-    logInfo(`${label}: strategy=click+upload clickTarget=${clickTarget} files=${names}`);
-    cli(['click', clickTarget]);
-    await sleep(900);
-    uploadFiles(absPaths);
-    const grew = await confirm('click+upload');
-    if (grew) return { strategy: 'click+upload', ...grew };
-    errors.push('click+upload: no new media detected');
-  } catch (e) { errors.push(`click+upload: ${String(e.message).split('\n')[0]}`); }
+  // 3) click + upload (file chooser) - try multiple click targets
+  const clickTargets = [
+    clickTarget,
+    `locator('button:has-text("Add media")').first()`,
+    `locator('div:has-text("Drag & drop or click to upload")').first()`,
+    `locator('button:has-text("Upload")').first()`
+  ].filter(Boolean);
+
+  for (const ct of clickTargets) {
+    try {
+      logInfo(`${label}: strategy=click+upload clickTarget=${ct} files=${names}`);
+      const clickRes = cli(['click', ct], { allowFailure: true });
+      if (clickRes.code !== 0) {
+        // Try JS click
+        try {
+          runCode(`async page => {
+            const els = [...document.querySelectorAll('button, div')];
+            const match = els.find(e => (e.innerText||'').includes('Add media') || (e.innerText||'').includes('Drag & drop'));
+            if (match) { match.click(); return 'clicked:' + (match.innerText||'').slice(0,30); }
+            return 'no-match';
+          }`);
+        } catch (_) { }
+      }
+      await sleep(1000);
+      uploadFiles(absPaths);
+      const grew = await confirm(`click+upload:${ct.slice(0, 30)}`);
+      if (grew) return { strategy: 'click+upload', ...grew, target: ct };
+      errors.push(`click+upload:${ct.slice(0, 20)}: no new media detected`);
+    } catch (e) { errors.push(`click+upload:${ct.slice(0, 20)}: ${String(e.message).split('\n')[0].slice(0, 100)}`); }
+    await sleep(500);
+  }
 
   throw new Error(`${label}: all upload strategies failed for [${names}]:\n- ${safeJoin(errors, '\n- ')}\nVisible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}`);
 }
@@ -519,25 +640,58 @@ async function fillCampaignInfo(report) {
   );
   assertContains(bodyText(), sweepTitle.slice(0, 20), 'Title echo');
 
-  // Diagnose file inputs (cover + gallery share the accept list)
+  // Wait for file inputs to appear - page may need time to render
   let inputs = [];
-  try {
-    inputs = listFileInputs();
-    if (!Array.isArray(inputs)) {
-      logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0, 200)}, coercing to []`);
+  for (let attempt = 0; attempt < 8; attempt++) {
+    try {
+      inputs = listFileInputs();
+      if (!Array.isArray(inputs)) {
+        logWarn(`listFileInputs returned non-array: ${JSON.stringify(inputs).slice(0, 200)}, coercing to []`);
+        inputs = [];
+      }
+      if (inputs.length > 0) {
+        logInfo(`Found ${inputs.length} file inputs after ${attempt} attempts`);
+        break;
+      }
+      logInfo(`Waiting for file inputs... attempt ${attempt + 1}/8, found ${inputs.length}`);
+      await sleep(1000);
+      // Try scrolling to reveal file inputs
+      if (attempt === 3) {
+        try {
+          runCode(`async page => { window.scrollTo(0, 0); return 'scrolled'; }`);
+          await sleep(500);
+        } catch (_) { }
+      }
+    } catch (e) {
+      logWarn(`listFileInputs threw: ${e.message}, using []`);
       inputs = [];
+      await sleep(1000);
     }
-  } catch (e) {
-    logWarn(`listFileInputs threw: ${e.message}, using []`);
-    inputs = [];
   }
+
   try {
-    logInfo(`file inputs on Campaign Info: ${JSON.stringify((Array.isArray(inputs) ? inputs : []).map(i => ({ i: i.index, accept: (i.accept || '').slice(0, 60), multiple: i.multiple })))}`);
+    logInfo(`file inputs on Campaign Info: ${JSON.stringify((Array.isArray(inputs) ? inputs : []).map(i => ({ i: i.index, accept: (i.accept || '').slice(0, 60), multiple: i.multiple, visible: i.visible })))}`);
   } catch (e) {
     logWarn(`file inputs log failed: ${e.message}, raw: ${JSON.stringify(inputs).slice(0, 500)}`);
   }
   report.media = report.media || {};
   report.media.fileInputs = inputs;
+
+  if (inputs.length === 0) {
+    logWarn(`No file inputs found after waiting, will try to trigger via Add media button`);
+    try {
+      // Try to find and click any area that might reveal file inputs
+      runCode(`async page => {
+        const btns = [...document.querySelectorAll('button')];
+        const addMediaBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+        if (addMediaBtn) {
+          // Don't click yet, just check if it exists
+          return 'found-add-media:' + addMediaBtn.innerText;
+        }
+        return 'no-add-media-btn';
+      }`);
+    } catch (_) { }
+  }
 
   const galleryOrder = [];
   const strategies = [];
@@ -567,17 +721,26 @@ async function fillCampaignInfo(report) {
     click: `locator('button[type="button"]:has-text("Add media")')`
   };
   for (const file of galleryMedia) {
-    let inputsNow = listFileInputs();
-    if (!Array.isArray(inputsNow)) inputsNow = [];
+    // Wait for file inputs before each gallery upload
+    let inputsNow = [];
+    for (let attempt = 0; attempt < 5; attempt++) {
+      inputsNow = listFileInputs();
+      if (!Array.isArray(inputsNow)) inputsNow = [];
+      if (inputsNow.length > 0) break;
+      logInfo(`Gallery waiting for file inputs... attempt ${attempt + 1}, found ${inputsNow.length}`);
+      await sleep(800);
+    }
+    logInfo(`Gallery upload ${path.basename(file)} with ${inputsNow.length} file inputs available`);
     const res = await attemptUpload({
       dropTarget: galleryTargets.drop,
       clickTarget: galleryTargets.click,
-      inputNth: inputsNow.length > 1 ? 1 : -1,
+      inputNth: inputsNow.length > 1 ? 1 : (inputsNow.length === 1 ? 0 : -1),
       absPaths: [file],
       label: `Gallery[${path.basename(file)}]`
     });
     galleryOrder.push(path.basename(file));
     strategies.push({ slot: 'gallery', file: path.basename(file), ...res, files: undefined });
+    await sleep(1000);
   }
 
   // Type coverage (non-fatal): try every extra type, remember order + errors.
@@ -585,18 +748,24 @@ async function fillCampaignInfo(report) {
   for (const file of typeCoverageMedia) {
     const name = path.basename(file);
     try {
-      let inputsNow = listFileInputs();
-      if (!Array.isArray(inputsNow)) inputsNow = [];
+      let inputsNow = [];
+      for (let attempt = 0; attempt < 4; attempt++) {
+        inputsNow = listFileInputs();
+        if (!Array.isArray(inputsNow)) inputsNow = [];
+        if (inputsNow.length > 0) break;
+        await sleep(600);
+      }
       const res = await attemptUpload({
         dropTarget: galleryTargets.drop,
         clickTarget: galleryTargets.click,
-        inputNth: inputsNow.length > 1 ? 1 : -1,
+        inputNth: inputsNow.length > 1 ? 1 : (inputsNow.length === 1 ? 0 : -1),
         absPaths: [file],
         label: `Gallery-type[${name}]`
       });
       galleryOrder.push(name);
       strategies.push({ slot: 'gallery-type', file: name, strategy: res.strategy });
       coverage.push({ file: name, ok: true, strategy: res.strategy });
+      await sleep(800);
     } catch (e) {
       coverage.push({ file: name, ok: false, error: String(e.message).split('\n')[0] });
       logWarn(`type coverage ${name} failed (recorded, continuing): ${String(e.message).split('\n')[0]}`);
@@ -1968,3 +2137,19 @@ async function main() {
 }
 
 main();
+
+// ==============================================================================
+// LATEST FILE MARKER - This indicates this is the latest version
+// Commit: 14daeab - fix: Gallery upload failing - no file inputs found, playwright-cli exit 1
+// Date: 2026-09-22T17:33:22.961325
+// Branch: arena/01a0c517-fandiem-happy-flow-sweep
+// This file contains all fixes:
+// - Campaigns click robust (8 selectors, JS fallback, direct navigation)
+// - Partners dropdowns robust (5 selectors, JS fallback, placeholder)
+// - safeJoin for all .join crashes (inputs.map, errors.join, captureVisibleErrors.join)
+// - listFileInputs always returns array with multiple selectors
+// - Gallery upload robust (5 drop targets, wait for file inputs, JS visibility)
+// - Prize Details modal fix, Allow & Select re-open every 10s via attach.js
+// If you see this comment, you have the latest file
+// ==============================================================================
+

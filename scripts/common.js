@@ -126,6 +126,7 @@ function buildSweepTitle() {
 // ---- uploads: 3 strategies ----
 function listFileInputs() {
   try {
+<<<<<<< HEAD
     const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll('input[type="file"]')].map((el, i) => ({
       index: i,
       accept: el.getAttribute('accept') || '',
@@ -136,6 +137,38 @@ function listFileInputs() {
     })))`);
     const parsed = JSON.parse(raw || '[]');
     // Ensure always array - fix for inputs.map is not a function
+=======
+    // Try multiple selectors and wait a bit for inputs to appear
+    const raw = evalPage(`() => {
+      const selectors = [
+        'input[type="file"]',
+        'input[type=file]',
+        'input[accept*="image"]',
+        'input[accept*="video"]',
+        'input.hidden',
+        '[data-testid="file-input"]'
+      ];
+      let all = [];
+      for (const sel of selectors) {
+        try {
+          const els = [...document.querySelectorAll(sel)];
+          for (const el of els) {
+            if (!all.find(x => x.el === el)) all.push({ el, sel });
+          }
+        } catch (_) {}
+      }
+      return JSON.stringify(all.map(({el, sel}, i) => ({
+        index: i,
+        accept: el.getAttribute('accept') || '',
+        name: el.getAttribute('name') || '',
+        id: el.id || '',
+        multiple: !!el.multiple,
+        visible: (() => { try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch(_) { return false; } })(),
+        selector: sel
+      })));
+    }`);
+    const parsed = JSON.parse(raw || '[]');
+>>>>>>> efa86e92dfe49b04b7204fc84a410152fa21a309
     if (Array.isArray(parsed)) return parsed;
     if (parsed && typeof parsed === 'object') {
       const vals = Object.values(parsed);
@@ -148,18 +181,62 @@ function listFileInputs() {
   }
 }
 
+<<<<<<< HEAD
+=======
+// Removed waitForFileInputs with busy loop - use sleep in run.js loops instead
+
+>>>>>>> efa86e92dfe49b04b7204fc84a410152fa21a309
 
 function dropFiles(target, absPaths) {
-  return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
+  try {
+    // Verify files exist
+    for (const p of absPaths) {
+      if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+    }
+    return cli(['drop', target, ...absPaths.map(p => `--path=${p}`)]);
+  } catch (e) {
+    // Try with allowFailure to get more info
+    try {
+      const res = cli(['drop', target, ...absPaths.map(p => `--path=${p}`)], { allowFailure: true });
+      if (res.code !== 0) {
+        throw new Error(`drop failed: ${res.stderr.slice(0,300) || res.stdout.slice(0,300)}`);
+      }
+      return res;
+    } catch (e2) {
+      throw e2;
+    }
+  }
 }
 
 function uploadFiles(absPaths) {
-  return cli(['upload', ...absPaths]);
+  try {
+    for (const p of absPaths) {
+      if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+    }
+    return cli(['upload', ...absPaths]);
+  } catch (e) {
+    try {
+      const res = cli(['upload', ...absPaths], { allowFailure: true });
+      if (res.code !== 0) {
+        throw new Error(`upload failed: ${res.stderr.slice(0,300) || res.stdout.slice(0,300)}`);
+      }
+      return res;
+    } catch (e2) {
+      throw e2;
+    }
+  }
 }
 
 function setInputFiles(css, absPaths) {
-  const code = `async page => { await page.locator(${JSON.stringify(css)}).first().setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`;
-  return runCode(code);
+  try {
+    for (const p of absPaths) {
+      if (!fs.existsSync(p)) throw new Error(`File not found: ${p}`);
+    }
+    const code = `async page => { await page.locator(${JSON.stringify(css)}).first().setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`;
+    return runCode(code);
+  } catch (e) {
+    throw new Error(`setInputFiles ${css} failed: ${e.message}`);
+  }
 }
 
 /**
