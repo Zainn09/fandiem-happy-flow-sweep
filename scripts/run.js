@@ -51,70 +51,13 @@ async function ensurePlaywrightAttached() {
         windowsHide: false
       });
       child.unref();
+      logInfo(`Spawned attach process: ${attachScript}`);
     } catch (e) {
       logWarn(`Failed to spawn attach.js: ${e.message}`);
     }
-
-    // --- FIX: open the actual extension permission pages ---
-    const EXT_ID = 'mmlmfjhmonkocbjadbfplnigmagldckm';
-    const connectUrls = [
-      `chrome-extension://${EXT_ID}/connect.html`,
-      `chrome-extension://${EXT_ID}/status.html`,
-    ];
-
-    // 1) Try via playwright-cli tab-new (if session partially attached, this will work)
-    for (const u of connectUrls) {
-      try {
-        const res = cli(['tab-new', u], { allowFailure: true });
-        if (res.code === 0) {
-          logInfo(`Opened permission page via tab-new: ${u}`);
-          break;
-        }
-      } catch (_) {}
-    }
-
-    // 2) Most reliable when NOT attached: spawn Chrome directly with extension URL in the right profile
-    // This bypasses Playwright and forces the Welcome/Allow & select page to appear.
-    try {
-      const fs = require('fs');
-      const { spawnSync } = require('child_process');
-      // Get profile dir via profile.js (same as attach.js does)
-      let profileDir = '';
-      try {
-        const profRes = spawnSync(process.execPath, [path.join(ROOT, 'scripts', 'profile.js')], {
-          cwd: ROOT,
-          encoding: 'utf8',
-          windowsHide: true
-        });
-        const m = String(profRes.stdout||'').match(/^Profile directory:\s*(.+)$/m);
-        if (m) profileDir = m[1].trim();
-      } catch (_) {}
-      const chromePath = config.chromeExecutablePath || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-      if (profileDir && fs.existsSync(chromePath)) {
-        for (const u of connectUrls) {
-          try {
-            const { spawn } = require('child_process');
-            const child2 = spawn(chromePath, [`--profile-directory=${profileDir}`, u], {
-              detached: true,
-              stdio: 'ignore',
-              windowsHide: false
-            });
-            child2.unref();
-            logInfo(`Spawned Chrome profile ${profileDir} with URL ${u}`);
-            break;
-          } catch (e) {
-            logWarn(`Chrome spawn for ${u} failed: ${e.message}`);
-          }
-        }
-      } else {
-        logWarn(`Could not spawn Chrome directly (profileDir=${profileDir||'unknown'} chromeExists=${fs.existsSync(chromePath)})`);
-      }
-    } catch (e) {
-      logWarn(`Direct Chrome open failed: ${e.message}`);
-    }
   }
 
-  launchAttach('Initial attach attempt...');
+  launchAttach('Initial attach attempt - opening Allow & Select tab...');
 
   const deadline = Date.now() + 60000;
   let attempts = 0;
@@ -128,26 +71,28 @@ async function ensurePlaywrightAttached() {
     }
     console.log(`  Waiting for Playwright session connection (click 'Allow & select' in Chrome)... [${attempts}]`);
 
-    // After every 5 attempts (~10s) re-open permission tab
+    // Every 5 attempts (~10 seconds) re-open the permission tab by re-launching attach.js
+    // This is the same method that worked before - it opens chrome-extension://.../connect.html?mcpRelayUrl=... with correct params
     if (attempts % 5 === 0) {
       const elapsed = Math.round((Date.now() - (deadline - 60000)) / 1000);
       console.log('');
       console.log('------------------------------------------------------------------');
-      console.log(`Still not attached after ${elapsed}s / ${attempts} checks. Re-opening permission tab...`);
-      console.log("Please check Chrome - a new tab should have opened. Click 'Allow & select'.");
+      console.log(`Still not attached after ${elapsed}s / ${attempts} checks. Re-opening Allow & Select tab...`);
+      console.log("If you missed it, a new Welcome tab should appear. Please click 'Allow & select'.");
       console.log('------------------------------------------------------------------');
       console.log('');
-      launchAttach(`Re-launching attach process after ${attempts} attempts (${elapsed}s)...`);
+      launchAttach(`Re-launching attach process after ${attempts} attempts (${elapsed}s) - this will open the Allow & Select tab with mcpRelayUrl param`);
     }
   }
   throw new Error(
     'Could not attach Playwright to the existing Chrome profile within 60s.\n' +
     "Make sure the Playwright extension is installed and you click 'Allow & select' when prompted,\n" +
     'or configure extensionToken in config.json / PLAYWRIGHT_MCP_EXTENSION_TOKEN.\n' +
-    'The code now re-opens the permission tab every 10s automatically.'
+    'The code now re-opens the Allow & Select tab every 10s automatically via attach.js (with correct mcpRelayUrl).'
   );
 }
 
+// ---------------------------------------------------------------- data ---
 // ---------------------------------------------------------------- data ---
 const isDryRun = process.argv.includes('--dry-run');
 function previewTitle() {
