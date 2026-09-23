@@ -126,35 +126,97 @@ function buildSweepTitle() {
 // ---- uploads: 3 strategies ----
 function listFileInputs() {
   try {
-    // Try multiple selectors and wait a bit for inputs to appear
     const raw = evalPage(`() => {
-      const selectors = [
-        'input[type="file"]',
-        'input[type=file]',
-        'input[accept*="image"]',
-        'input[accept*="video"]',
-        'input.hidden',
-        '[data-testid="file-input"]'
-      ];
-      let all = [];
-      for (const sel of selectors) {
+      // Brutal search: find ALL inputs and filter to file type, also check hidden and shadow
+      const found = [];
+      const seen = new Set();
+      
+      // Helper to collect from a root
+      function collect(root) {
         try {
-          const els = [...document.querySelectorAll(sel)];
-          for (const el of els) {
-            if (!all.find(x => x.el === el)) all.push({ el, sel });
+          // Direct file inputs
+          const fileInputs = [...root.querySelectorAll('input[type="file"]')];
+          for (const el of fileInputs) {
+            if (!seen.has(el)) {
+              seen.add(el);
+              found.push({
+                accept: el.getAttribute('accept') || '',
+                name: el.getAttribute('name') || '',
+                id: el.id || '',
+                multiple: !!el.multiple,
+                visible: (() => { try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch(_) { return false; } })(),
+                parentText: (el.parentElement ? (el.parentElement.innerText||'').slice(0,80) : ''),
+                selector: 'input[type="file"]'
+              });
+            }
+          }
+          // Also check inputs with accept containing image/video
+          const acceptInputs = [...root.querySelectorAll('input[accept]')].filter(el => /image|video/.test(el.getAttribute('accept')||''));
+          for (const el of acceptInputs) {
+            if (!seen.has(el)) {
+              seen.add(el);
+              found.push({
+                accept: el.getAttribute('accept') || '',
+                name: el.getAttribute('name') || '',
+                id: el.id || '',
+                multiple: !!el.multiple,
+                visible: (() => { try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch(_) { return false; } })(),
+                parentText: (el.parentElement ? (el.parentElement.innerText||'').slice(0,80) : ''),
+                selector: 'input[accept]'
+              });
+            }
+          }
+          // Check for hidden class inputs
+          const hiddenInputs = [...root.querySelectorAll('input.hidden')].filter(el => el.type === 'file');
+          for (const el of hiddenInputs) {
+            if (!seen.has(el)) {
+              seen.add(el);
+              found.push({
+                accept: el.getAttribute('accept') || '',
+                name: el.getAttribute('name') || '',
+                id: el.id || '',
+                multiple: !!el.multiple,
+                visible: false,
+                parentText: '',
+                selector: 'input.hidden'
+              });
+            }
+          }
+          // Shadow DOM
+          const allEls = [...root.querySelectorAll('*')];
+          for (const el of allEls) {
+            if (el.shadowRoot) collect(el.shadowRoot);
           }
         } catch (_) {}
       }
-      return JSON.stringify(all.map(({el, sel}, i) => ({
-        index: i,
-        accept: el.getAttribute('accept') || '',
-        name: el.getAttribute('name') || '',
-        id: el.id || '',
-        multiple: !!el.multiple,
-        visible: (() => { try { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; } catch(_) { return false; } })(),
-        selector: sel
-      })));
+      
+      collect(document);
+      
+      // Also try to find in iframes (best effort)
+      try {
+        const iframes = [...document.querySelectorAll('iframe')];
+        for (const iframe of iframes) {
+          try {
+            const doc = iframe.contentDocument || iframe.contentWindow.document;
+            if (doc) collect(doc);
+          } catch (_) {}
+        }
+      } catch (_) {}
+      
+      return JSON.stringify(found.map((f,i) => ({ index: i, ...f })));
     }`);
+    // console log raw for debugging
+    if (!raw || raw.trim() === '[]') {
+      // Fallback: try via playwright locator count for debugging
+      try {
+        const countRaw = runCode(`async page => { const c = await page.locator('input[type="file"]').count(); return String(c); }`);
+        const count = Number(countRaw.trim()) || 0;
+        if (count > 0) {
+          logInfo(`listFileInputs eval found 0 but locator count=${count}, creating dummy entries`);
+          return Array.from({ length: count }, (_, i) => ({ index: i, accept: '', name: '', id: '', multiple: false, visible: false, selector: 'locator-count' }));
+        }
+      } catch (_) { }
+    }
     const parsed = JSON.parse(raw || '[]');
     if (Array.isArray(parsed)) return parsed;
     if (parsed && typeof parsed === 'object') {
@@ -163,8 +225,46 @@ function listFileInputs() {
     }
     return [];
   } catch (e) {
-    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch(_) {}
+    try { logWarn(`listFileInputs failed: ${e.message}, returning []`); } catch (_) { }
     return [];
+  }
+}
+
+function revealFileInputs() {
+  try {
+    const res = evalPage(`() => {
+      let changed = 0;
+      const inputs = [...document.querySelectorAll('input[type="file"]')];
+      for (const inp of inputs) {
+        try {
+          inp.style.display = 'block';
+          inp.style.visibility = 'visible';
+          inp.style.opacity = '1';
+          inp.style.width = '100px';
+          inp.style.height = '20px';
+          inp.style.position = 'static';
+          inp.removeAttribute('hidden');
+          inp.classList.remove('hidden');
+          changed++;
+        } catch(_) {}
+      }
+      // Also scroll gallery into view
+      try {
+        const btns = [...document.querySelectorAll('button')];
+        const galleryBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+        if (galleryBtn) {
+          galleryBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
+        } else {
+          window.scrollBy(0, 400);
+        }
+      } catch(_) {}
+      return String(changed);
+    }`);
+    logInfo(`revealFileInputs: made ${res} inputs visible and scrolled`);
+    return Number(res) || 0;
+  } catch (e) {
+    logWarn(`revealFileInputs failed: ${e.message}`);
+    return 0;
   }
 }
 
@@ -182,11 +282,11 @@ function dropFiles(target, absPaths) {
       const res = cli(['drop', target, ...absPaths.map(p => `--path=${p}`)], { allowFailure: true });
       if (res.code !== 0) {
         const fullErr = `STDERR: ${res.stderr}\nSTDOUT: ${res.stdout}`;
-        throw new Error(`drop failed for target ${target}: ${fullErr.slice(0,1000)}`);
+        throw new Error(`drop failed for target ${target}: ${fullErr.slice(0, 1000)}`);
       }
       return res;
     } catch (e2) {
-      throw new Error(`dropFiles ${target} error: ${e2.message.slice(0,1000)} | original: ${e.message.slice(0,500)}`);
+      throw new Error(`dropFiles ${target} error: ${e2.message.slice(0, 1000)} | original: ${e.message.slice(0, 500)}`);
     }
   }
 }
@@ -201,11 +301,11 @@ function uploadFiles(absPaths) {
     try {
       const res = cli(['upload', ...absPaths], { allowFailure: true });
       if (res.code !== 0) {
-        throw new Error(`upload failed: STDERR=${res.stderr.slice(0,800)} STDOUT=${res.stdout.slice(0,800)}`);
+        throw new Error(`upload failed: STDERR=${res.stderr.slice(0, 800)} STDOUT=${res.stdout.slice(0, 800)}`);
       }
       return res;
     } catch (e2) {
-      throw new Error(`uploadFiles error: ${e2.message.slice(0,1000)}`);
+      throw new Error(`uploadFiles error: ${e2.message.slice(0, 1000)}`);
     }
   }
 }
@@ -275,19 +375,19 @@ function captureVisibleErrors() {
     }
     return [];
   } catch (e) {
-    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch(_) {}
+    try { logWarn(`captureVisibleErrors failed: ${e.message}, returning []`); } catch (_) { }
     return [];
   }
 }
 
-function safeJoin(arr, sep=' | ') {
+function safeJoin(arr, sep = ' | ') {
   try {
     if (Array.isArray(arr)) return arr.join(sep);
     if (arr && typeof arr === 'object') {
-      const vals = Object.values(arr).filter(v=>typeof v==='string');
+      const vals = Object.values(arr).filter(v => typeof v === 'string');
       return vals.join(sep);
     }
-    return String(arr||'');
+    return String(arr || '');
   } catch (_) { return ''; }
 }
 
@@ -300,6 +400,8 @@ function galleryTileCount() {
   return Number(String(raw).replace(/[^0-9]/g, '')) || 0;
 }
 
+const OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"][data-value], [data-slot="select-item"], [data-radix-collection-item]';
+
 function listComboboxOptions() {
   try {
     const raw = evalPage(`() => JSON.stringify([...document.querySelectorAll(${JSON.stringify(OPTION_SELECTOR)})].map(e => ({ text: (e.innerText || '').trim().slice(0, 160), html: e.innerHTML.trim().slice(0, 400) })).filter(o => o.text).slice(0, 40))`);
@@ -310,7 +412,6 @@ function listComboboxOptions() {
   } catch (_) { return []; }
 }
 
-const OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"][data-value], [data-slot="select-item"], [data-radix-collection-item]';
 
 function comboNorm(value) {
   return String(value === undefined || value === null ? '' : value).toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -348,11 +449,11 @@ function fillPopupSearch(text) {
 async function selectCombobox({ comboboxTarget, preferredName, label }) {
   const name = label || 'Combobox';
   logInfo(`${name}: clicking combobox target ${comboboxTarget}`);
-  
+
   // Click to open
   click(comboboxTarget);
   await sleep(1500);
-  
+
   // Try JS click as backup to ensure dropdown opens
   try {
     runCode(`async page => {
@@ -361,11 +462,11 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
       return 'no-btn';
     }`);
     await sleep(1000);
-  } catch (_) {}
-  
+  } catch (_) { }
+
   const want = preferredName ? String(preferredName).trim() : '';
   logInfo(`${name}: dropdown should be open now, looking for options, want=${want || '(any random)'}`);
-  
+
   // Ultra simple: directly click any option via JS - try every possible selector immediately
   const jsClickAny = `
     async page => {
@@ -451,12 +552,12 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
       }
     }
   `;
-  
+
   // Try up to 5 times with waiting
-  for (let attempt=0; attempt<5; attempt++) {
+  for (let attempt = 0; attempt < 5; attempt++) {
     try {
       const res = runCode(jsClickAny);
-      logInfo(`${name}: JS click any attempt ${attempt+1}: ${res}`);
+      logInfo(`${name}: JS click any attempt ${attempt + 1}: ${res}`);
       if (String(res).startsWith('clicked')) {
         await sleep(1200);
         // Verify badge appeared
@@ -472,26 +573,26 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
             const chosenText = String(res).split(':').slice(2).join(':') || 'Unknown';
             return { index: 0, text: chosenText, innerHTML: '', optionsCount: 1, options: [chosenText], filteredBy: 'js-any' };
           }
-        } catch (_) {}
-        
+        } catch (_) { }
+
         // Even if verify fails, return as success if clicked
         const chosenText = String(res).split(':').slice(2).join(':') || 'Random Talent';
         return { index: 0, text: chosenText, innerHTML: '', optionsCount: 1, options: [chosenText], filteredBy: 'js-any' };
       }
     } catch (e) {
-      logWarn(`${name}: JS click any attempt ${attempt+1} failed: ${e.message}`);
+      logWarn(`${name}: JS click any attempt ${attempt + 1} failed: ${e.message}`);
     }
     await sleep(1000);
-    
+
     // Try reopening dropdown if options not found
     if (attempt === 2) {
       try {
         click(comboboxTarget);
         await sleep(1000);
-      } catch (_) {}
+      } catch (_) { }
     }
   }
-  
+
   // If all JS attempts fail, try original method with listComboboxOptions
   try {
     let options = listComboboxOptions();
@@ -510,8 +611,8 @@ async function selectCombobox({ comboboxTarget, preferredName, label }) {
   } catch (e) {
     logWarn(`${name}: fallback method failed: ${e.message}`);
   }
-  
-  throw new Error(`${name}: Could not click any option after all attempts - dropdown may be open but click failed. Body: ${bodyText().slice(0,800)}`);
+
+  throw new Error(`${name}: Could not click any option after all attempts - dropdown may be open but click failed. Body: ${bodyText().slice(0, 800)}`);
 }
 
 
@@ -821,7 +922,7 @@ function fillTextareaByPlaceholder(placeholders, value) {
         logInfo(`filled textarea ${modalSel ? '(modal) ' : ''}placeholder=${JSON.stringify(p)}`);
         return p;
       }
-      tried.push(`${modalSel||'global'}:${p}`);
+      tried.push(`${modalSel || 'global'}:${p}`);
     }
   }
   // Fallback: any textarea inside modal
@@ -949,7 +1050,7 @@ module.exports = {
   bodyText, currentUrl, assertContains, assertAbsent, heading,
   resolveAsset, resolveAssets,
   nextDailyRunNumber, buildSweepTitle,
-  listFileInputs, dropFiles, uploadFiles, setInputFiles, robustUpload,
+  listFileInputs, revealFileInputs, dropFiles, uploadFiles, setInputFiles, robustUpload,
   captureVisibleErrors, safeJoin, galleryItemsText, galleryTileCount,
   listComboboxOptions, selectCombobox,
   fillRichTextLast, fillRichTextByPlaceholder, waitForText,

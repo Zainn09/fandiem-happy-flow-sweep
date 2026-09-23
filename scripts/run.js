@@ -7,7 +7,7 @@ const {
   locator, click, fill, goto, screenshot, evalPage, runCode, tabNew,
   bodyText, currentUrl, assertContains, assertAbsent, heading,
   resolveAsset, resolveAssets, buildSweepTitle,
-  listFileInputs, dropFiles, uploadFiles, captureVisibleErrors, safeJoin,
+  listFileInputs, revealFileInputs, dropFiles, uploadFiles, captureVisibleErrors, safeJoin,
   galleryItemsText, galleryTileCount, listComboboxOptions, selectCombobox,
   fillRichTextByPlaceholder, waitForText,
   parseJson, readValues, ensureSwitch, findSwitch, switchList,
@@ -288,204 +288,271 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
     return null;
   }
 
-  // 1) drop - try multiple targets and JS fallback
-  const dropTargets = [
-    dropTarget,
-    `locator('button:has-text("Add media")').first()`,
-    `locator('div:has-text("Drag & drop or click to upload")').first()`,
-    `locator('div.space-y-1').first()`,
-    `locator('input[type="file"]').first()`
-  ].filter(Boolean);
+  // Ensure gallery is in viewport before any upload
+  try {
+    revealFileInputs();
+    await sleep(500);
+  } catch (_) { }
 
-  for (const target of dropTargets) {
+  // 1) drop - try only valid drop targets, with scroll reveal
+  // For gallery, use precise button selector that is actually a drop zone
+  // Avoid broad div:has-text which matched fixed inset overlay
+  const dropTargets = [];
+  if (dropTarget) dropTargets.push(dropTarget);
+  // Add gallery-specific precise targets
+  if (label && label.includes('Gallery')) {
+    dropTargets.push(
+      `locator('button[type="button"]:has-text("Add media")').first()`,
+      `locator('button:has-text("Add media")').first()`,
+      `locator('div.space-y-1').nth(1)`,
+      `locator('div[class*="border-dashed"]').first()`
+    );
+  } else if (label === 'Cover') {
+    dropTargets.push(
+      `locator('div.space-y-1:has(input[type="file"])').first()`,
+      `locator('div.space-y-1').first()`
+    );
+  } else {
+    // Generic for Bonus etc
+    dropTargets.push(
+      `locator('button:has-text("Add media")').first()`,
+      `locator('div.space-y-1').first()`
+    );
+  }
+  // Filter duplicates
+  const uniqTargets = [...new Set(dropTargets)];
+
+  for (const target of uniqTargets) {
     try {
+      // Scroll target into view before drop
+      try {
+        runCode(`async page => {
+          try {
+            const el = document.evaluate("${target.replace(/"/g, '\\"')}", document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+          } catch(_) {}
+          // Better: find Add media button and scroll
+          const btn = [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Add media'));
+          if (btn) btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+          return 'scrolled';
+        }`);
+      } catch (_) { }
+      await sleep(400);
       logInfo(`${label}: strategy=drop target=${target} files=${names}`);
       dropFiles(target, absPaths);
       const grew = await confirm(`drop:${target.slice(0, 40)}`);
       if (grew) return { strategy: 'drop', ...grew, target };
-      errors.push(`drop:${target.slice(0, 30)}: no new media detected`);
+      errors.push(`drop:${target.slice(0, 40)}: no new media detected (tiles stayed ${beforeTiles})`);
     } catch (e) {
-      errors.push(`drop:${target.slice(0, 40)}: ${String(e.message).slice(0, 500)}`);
+      // Show more error detail, not just first line
+      const msg = String(e.message).slice(0, 900).replace(/\n/g, ' | ');
+      errors.push(`drop:${target.slice(0, 40)}: ${msg}`);
     }
     await sleep(500);
   }
 
-  // Try JS drop via DataTransfer
+  // 2) setInputFiles - ROBUST: reveal, then try every index even if list says 0
+  // This is the most reliable for hidden inputs
   try {
-    logInfo(`${label}: strategy=js-drop files=${names}`);
-    const jsDropRes = runCode(`async page => {
-      try {
-        const files = ${JSON.stringify(absPaths)};
-        // Find drop zone
-        const zones = [
-          ...document.querySelectorAll('button:has-text("Add media")'),
-          ...document.querySelectorAll('div:has-text("Drag & drop")'),
-          ...document.querySelectorAll('div.space-y-1'),
-          ...document.querySelectorAll('[data-testid="drop-zone"]')
-        ];
-        // Actually use JS to find via text
-        const allDivs = [...document.querySelectorAll('div, button')];
-        const dropZone = allDivs.find(el => (el.innerText||'').includes('Drag & drop') || (el.innerText||'').includes('Add media'));
-        if (!dropZone) return 'no-zone';
-        // Create fake drop event - can't actually set files via JS for security, but try
-        return 'found-zone:' + (dropZone.innerText||'').slice(0,50);
-      } catch(e) { return 'error:' + e.message; }
-    }`);
-    logInfo(`${label}: js-drop result: ${jsDropRes}`);
-  } catch (e) {
-    errors.push(`js-drop: ${e.message.slice(0, 100)}`);
-  }
+    // Ensure inputs are revealed
+    revealFileInputs();
+    await sleep(800);
 
-  // 2) setInputFiles on nth hidden input - wait for inputs and try multiple ways
-  if (inputNth !== null && inputNth !== undefined) {
+    let inputs = listFileInputs();
+    if (!Array.isArray(inputs)) inputs = [];
+    logInfo(`${label}: file inputs before setInputFiles: ${JSON.stringify(inputs.map(i => ({ idx: i.index, accept: (i.accept || '').slice(0, 40), multiple: i.multiple })))}`);
+
+    // If still 0, try alternative detection via locator count and still attempt set
+    let locatorCount = 0;
     try {
-      // Wait for file inputs to appear
-      let inputs = [];
-      for (let i = 0; i < 6; i++) {
+      const cntRaw = runCode(`async page => String(await page.locator('input[type="file"]').count())`);
+      locatorCount = Number(cntRaw.trim()) || 0;
+      logInfo(`${label}: locator count=${locatorCount}, eval found ${inputs.length}`);
+      if (locatorCount > 0 && inputs.length === 0) {
+        inputs = Array.from({ length: locatorCount }, (_, i) => ({ index: i }));
+      }
+    } catch (_) { }
+
+    // Try scrolling and clicking Add media to trigger input mount, then re-check
+    if (inputs.length === 0) {
+      logWarn(`${label}: still 0 inputs, trying to click Add media to mount inputs`);
+      try {
+        // Scroll gallery into view
+        runCode(`async page => {
+          const btns = [...document.querySelectorAll('button')];
+          const galleryBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+          if (galleryBtn) {
+            galleryBtn.scrollIntoView({ block: 'center' });
+            // Also try hover
+            await page.locator('button:has-text("Add media")').first().hover().catch(()=>{});
+            return 'scrolled-hover';
+          }
+          window.scrollBy(0, 600);
+          return 'scroll-fallback';
+        }`);
+        await sleep(800);
+        // Try clicking gallery button to see if it reveals input (but not required for setInputFiles)
+        // We do NOT click for gallery yet because it may open file chooser prematurely
         inputs = listFileInputs();
         if (!Array.isArray(inputs)) inputs = [];
-        if (inputs.length > 0) break;
-        logInfo(`${label}: waiting for file inputs... attempt ${i + 1}, found ${inputs.length}`);
-        await sleep(1000);
-        // Try clicking Add media to reveal file input
-        if (i === 2) {
-          try {
-            cli(['click', `locator('button:has-text("Add media")').first()`], { allowFailure: true });
-            await sleep(800);
-          } catch (_) { }
-        }
-      }
+        logInfo(`${label}: after scroll, found ${inputs.length} inputs`);
+      } catch (_) { }
+    }
 
-      // If no inputs found, try to create or reveal them
-      if (inputs.length === 0) {
-        logWarn(`${label}: no file inputs found, trying to reveal via JS and Add media click`);
-        try {
-          // Try clicking Add media via JS to create file inputs
-          runCode(`async page => {
-            const btns = [...document.querySelectorAll('button')];
-            const addBtn = btns.find(b => (b.innerText||'').includes('Add media'));
-            if (addBtn) {
-              addBtn.click();
-              return 'clicked-add-media';
-            }
-            return 'no-add-media';
-          }`);
-          await sleep(1500);
-          inputs = listFileInputs();
-          if (!Array.isArray(inputs)) inputs = [];
-          logInfo(`${label}: after Add media click, found ${inputs.length} inputs`);
-        } catch (_) { }
+    // Try every possible input index - even if list says 0, try 0,1,2
+    const tryIndices = [];
+    if (inputs.length > 0) {
+      if (inputNth === -1) tryIndices.push(inputs.length - 1);
+      else if (inputNth !== null && inputNth !== undefined) tryIndices.push(inputNth);
+      else tryIndices.push(0);
+      // Also add siblings as fallback
+      for (let i = 0; i < Math.min(inputs.length, 3); i++) if (!tryIndices.includes(i)) tryIndices.push(i);
+    } else {
+      // No inputs detected but locator may still handle it - try 0,1
+      tryIndices.push(0, 1);
+    }
+    // For Gallery label, prefer index 1 if available, else 0
+    if (label && label.includes('Gallery') && !tryIndices.includes(1) && tryIndices.length < 3) {
+      // ensure we try 1 as well
+      if (!tryIndices.includes(0)) tryIndices.unshift(0);
+      if (!tryIndices.includes(1)) tryIndices.push(1);
+    }
 
-        // If still 0, try to find in iframes or shadow DOM
-        if (inputs.length === 0) {
-          try {
-            const iframeCheck = evalPage(`() => {
-              let count = 0;
-              try {
-                const iframes = document.querySelectorAll('iframe');
-                for (const iframe of iframes) {
-                  try {
-                    const doc = iframe.contentDocument;
-                    if (doc) count += doc.querySelectorAll('input[type="file"]').length;
-                  } catch(e) {}
-                }
-              } catch(e) {}
-              return String(count);
-            }`);
-            logInfo(`${label}: file inputs in iframes: ${iframeCheck}`);
-          } catch (_) { }
-        }
-      }
+    const inputSelectors = [
+      `input[type="file"]`,
+      `input[type=file]`,
+      `input[accept*="image"]`,
+      `input.hidden`,
+      `input[accept*="png"]`
+    ];
 
-      const idx = inputNth === -1 ? inputs.length - 1 : (inputNth !== null ? inputNth : 0);
-      logInfo(`${label}: strategy=setInputFiles nth=${idx} (inputs=${inputs.length}) files=${names}`);
-      if (idx < 0 || inputs.length === 0) throw new Error(`no file inputs on page (found ${inputs.length}) after waiting and trying to reveal`);
-
-      // Try multiple selectors for setInputFiles
-      const inputSelectors = [
-        `input[type="file"]`,
-        `input[type=file]`,
-        `input[accept*="image"]`,
-        `input.hidden`
-      ];
-
-      let setOk = false;
+    let setSucceeded = false;
+    let lastSetError = '';
+    outer: for (const idx of tryIndices) {
       for (const sel of inputSelectors) {
         try {
-          runCode(`async page => { await page.locator(${JSON.stringify(sel)}).nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`);
-          setOk = true;
-          break;
-        } catch (e) {
-          // try next
-        }
-      }
-
-      if (!setOk) {
-        // Direct JS set via DataTransfer (more reliable)
-        try {
-          const jsSetRes = runCode(`async page => {
+          logInfo(`${label}: trying setInputFiles sel=${sel} nth=${idx} files=${names}`);
+          // Reveal again before each attempt
+          revealFileInputs();
+          const code = `async page => { 
+            // Make input visible before set
             try {
-              const filePaths = ${JSON.stringify(absPaths)};
-              const inputs = [...document.querySelectorAll('input[type="file"]')];
-              if (!inputs[${idx}]) return 'no-input-at-' + ${idx} + ':found=' + inputs.length;
-              // We can't set file path directly via JS for security, but we can try to trigger
-              // Actually setInputFiles via playwright is the way, we already tried
-              // Try to make input visible and then set
-              const input = inputs[${idx}];
-              input.style.display = 'block';
-              input.style.visibility = 'visible';
-              input.style.opacity = '1';
-              return 'made-visible:' + input.accept;
-            } catch(e) { return 'error:' + e.message; }
-          }`);
-          logInfo(`${label}: js setInputFiles prep: ${jsSetRes}`);
-          // Try again after making visible
-          runCode(`async page => { await page.locator('input[type="file"]').nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); return 'ok'; }`);
-          setOk = true;
+              const els = await page.locator(${JSON.stringify(sel)}).all();
+              if (els[${idx}]) {
+                await els[${idx}].evaluate(el => {
+                  el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1';
+                  el.style.width='100px'; el.style.height='20px'; el.style.position='static';
+                  el.classList.remove('hidden'); el.removeAttribute('hidden');
+                }).catch(()=>{});
+              }
+            } catch(_) {}
+            await page.locator(${JSON.stringify(sel)}).nth(${idx}).setInputFiles(${JSON.stringify(absPaths)}); 
+            return 'ok:'+${JSON.stringify(sel)}+':' + ${idx}; 
+          }`;
+          const res = runCode(code);
+          logInfo(`${label}: setInputFiles result: ${res}`);
+          if (String(res).includes('ok')) {
+            setSucceeded = true;
+            await sleep(1500);
+            const grew = await confirm(`setInputFiles[${sel}:${idx}]`);
+            if (grew) return { strategy: `setInputFiles[${sel}:${idx}]`, ...grew };
+            errors.push(`setInputFiles[${sel}:${idx}]: no new media detected (tiles ${beforeTiles}->${galleryTileCount()}, items ${beforeItems}->${itemsNumber()})`);
+            // Don't break - try next selector/index, maybe different input handles gallery
+          } else {
+            lastSetError = res;
+          }
         } catch (e) {
-          throw new Error(`setInputFiles all selectors failed: ${e.message}`);
+          lastSetError = String(e.message).slice(0, 800);
+          // continue to next
         }
+        await sleep(300);
       }
+    }
 
-      const grew = await confirm(`setInputFiles[${idx}]`);
-      if (grew) return { strategy: `setInputFiles[${idx}]`, ...grew };
-      errors.push(`setInputFiles[${idx}]: no new media detected`);
-    } catch (e) { errors.push(`setInputFiles: ${String(e.message).slice(0, 500)}`); }
+    if (!setSucceeded && lastSetError) {
+      errors.push(`setInputFiles: ${lastSetError.slice(0, 800)}`);
+    } else if (!setSucceeded) {
+      errors.push(`setInputFiles: all ${tryIndices.length * inputSelectors.length} combinations tried, none confirmed`);
+    }
+
+    // If setSucceeded but no growth, still record error - will try click+upload next
+
+  } catch (e) {
+    errors.push(`setInputFiles: ${String(e.message).slice(0, 900).replace(/\n/g, ' | ')}`);
   }
 
-  // 3) click + upload (file chooser) - try multiple click targets
-  const clickTargets = [
-    clickTarget,
-    `locator('button:has-text("Add media")').first()`,
-    `locator('div:has-text("Drag & drop or click to upload")').first()`,
-    `locator('button:has-text("Upload")').first()`
-  ].filter(Boolean);
+  // 3) click + upload (file chooser) - with better targets and JS trigger
+  const clickTargets = [];
+  if (clickTarget) clickTargets.push(clickTarget);
+  if (label && label.includes('Gallery')) {
+    clickTargets.push(
+      `locator('button[type="button"]:has-text("Add media")').first()`,
+      `locator('button:has-text("Add media")').first()`
+    );
+  } else {
+    clickTargets.push(
+      `locator('button:has-text("Add media")').first()`,
+      `locator('div:has-text("Drag & drop or click to upload")').first()`,
+      `locator('button:has-text("Upload")').first()`,
+      `locator('div.space-y-1').first()`
+    );
+  }
+  const uniqClick = [...new Set(clickTargets)];
 
-  for (const ct of clickTargets) {
+  for (const ct of uniqClick) {
     try {
       logInfo(`${label}: strategy=click+upload clickTarget=${ct} files=${names}`);
+      // Scroll into view
+      try {
+        runCode(`async page => {
+          const btn = [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Add media'));
+          if (btn) btn.scrollIntoView({ block: 'center' });
+          return 'scrolled';
+        }`);
+        await sleep(400);
+      } catch (_) { }
+
+      let clicked = false;
       const clickRes = cli(['click', ct], { allowFailure: true });
-      if (clickRes.code !== 0) {
-        // Try JS click
+      if (clickRes.code === 0) clicked = true;
+      else {
+        // Try JS click with precise selector
         try {
-          runCode(`async page => {
-            const els = [...document.querySelectorAll('button, div')];
-            const match = els.find(e => (e.innerText||'').includes('Add media') || (e.innerText||'').includes('Drag & drop'));
-            if (match) { match.click(); return 'clicked:' + (match.innerText||'').slice(0,30); }
-            return 'no-match';
+          const jsClick = runCode(`async page => {
+            const btns = [...document.querySelectorAll('button')];
+            const galleryBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+            if (galleryBtn) { galleryBtn.click(); return 'js-clicked-gallery'; }
+            const div = [...document.querySelectorAll('div')].find(d => (d.innerText||'').includes('Drag & drop or click to upload'));
+            if (div) { div.click(); return 'js-clicked-div'; }
+            return 'js-no-target';
           }`);
+          logInfo(`${label}: JS click fallback: ${jsClick}`);
+          if (String(jsClick).includes('clicked')) clicked = true;
         } catch (_) { }
       }
+      if (!clicked) {
+        errors.push(`click+upload:${ct.slice(0, 30)}: click failed`);
+        continue;
+      }
       await sleep(1000);
-      uploadFiles(absPaths);
+      try {
+        uploadFiles(absPaths);
+      } catch (ue) {
+        // Show full error, not truncated to 100
+        const msg = String(ue.message).slice(0, 900).replace(/\n/g, ' | ');
+        errors.push(`click+upload:${ct.slice(0, 20)}: ${msg}`);
+        continue;
+      }
       const grew = await confirm(`click+upload:${ct.slice(0, 30)}`);
       if (grew) return { strategy: 'click+upload', ...grew, target: ct };
-      errors.push(`click+upload:${ct.slice(0, 20)}: no new media detected`);
-    } catch (e) { errors.push(`click+upload:${ct.slice(0, 20)}: ${String(e.message).split('\n')[0].slice(0, 100)}`); }
+      errors.push(`click+upload:${ct.slice(0, 30)}: no new media detected (tiles ${beforeTiles}->${galleryTileCount()})`);
+    } catch (e) {
+      const msg = String(e.message).slice(0, 900).replace(/\n/g, ' | ');
+      errors.push(`click+upload:${ct.slice(0, 20)}: ${msg}`);
+    }
     await sleep(500);
   }
 
-  throw new Error(`${label}: all upload strategies failed for [${names}]:\n- ${safeJoin(errors, '\n- ')}\nVisible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}`);
+  throw new Error(`${label}: all upload strategies failed for [${names}]:\n- ${safeJoin(errors, '\n- ')}\nVisible errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'} | Tiles ${beforeTiles}->${galleryTileCount()} Items ${beforeItems}->${itemsNumber()}`);
 }
 
 async function selectComboboxWithFallback({ comboboxTarget, preferredName, label }) {
@@ -750,6 +817,22 @@ async function fillCampaignInfo(report) {
     } catch (_) { }
   }
 
+  if (inputs.length === 0) {
+    logWarn(`No file inputs found after waiting, will try to trigger via Add media button`);
+    try {
+      // Try to find and click any area that might reveal file inputs
+      runCode(`async page => {
+        const btns = [...document.querySelectorAll('button')];
+        const addMediaBtn = btns.find(b => (b.innerText||'').includes('Add media'));
+        if (addMediaBtn) {
+          // Don't click yet, just check if it exists
+          return 'found-add-media:' + addMediaBtn.innerText;
+        }
+        return 'no-add-media-btn';
+      }`);
+    } catch (_) { }
+  }
+
   const galleryOrder = [];
   const strategies = [];
 
@@ -772,32 +855,88 @@ async function fillCampaignInfo(report) {
     report.media.cover = { files: coverMedia.map(f => path.basename(f)), error: String(e.message).split('\n')[0] };
   }
 
+  // Ensure gallery section is visible before uploads - scroll down
+  try {
+    logInfo('Scrolling to ensure gallery section visible');
+    revealFileInputs();
+    await sleep(800);
+    runCode(`async page => {
+      // Scroll to bring gallery into view - look for Media Gallery heading or Add media button
+      const headings = [...document.querySelectorAll('h1,h2,h3,span,p')].filter(e => /Media Gallery|Gallery/i.test(e.innerText||''));
+      if (headings[0]) headings[0].scrollIntoView({ behavior: 'instant', block: 'center' });
+      else {
+        const btn = [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Add media'));
+        if (btn) btn.scrollIntoView({ behavior: 'instant', block: 'center' });
+        else window.scrollBy(0, 500);
+      }
+      return 'scrolled-to-gallery';
+    }`);
+    await sleep(1000);
+    // Wait for Add media button to be visible
+    for (let i = 0; i < 6; i++) {
+      const visible = evalPage(`() => {
+        const btn = [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Add media'));
+        if (!btn) return 'no-btn';
+        const r = btn.getBoundingClientRect();
+        return JSON.stringify({ text: btn.innerText.slice(0,30), visible: r.width>0 && r.height>0, top: Math.round(r.top), height: Math.round(r.height) });
+      }`);
+      logInfo(`Gallery button check ${i + 1}: ${visible}`);
+      if (visible.includes('"visible":true')) break;
+      await sleep(800);
+    }
+  } catch (e) {
+    logWarn(`Gallery scroll failed: ${e.message}`);
+  }
+
   // Gallery (required): button[type=button] containing "Add media" — upload one by one to preserve order.
   const galleryTargets = {
     drop: `locator('button[type="button"]:has-text("Add media")')`,
     click: `locator('button[type="button"]:has-text("Add media")')`
   };
   for (const file of galleryMedia) {
-    // Wait for file inputs before each gallery upload
+    // Ensure gallery still in view before each file
+    try {
+      runCode(`async page => {
+        const btn = [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Add media'));
+        if (btn) btn.scrollIntoView({ block: 'center' });
+        return 'scrolled';
+      }`);
+      await sleep(400);
+    } catch (_) { }
+
+    // Wait for file inputs before each gallery upload - with reveal
     let inputsNow = [];
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 6; attempt++) {
+      revealFileInputs();
       inputsNow = listFileInputs();
       if (!Array.isArray(inputsNow)) inputsNow = [];
       if (inputsNow.length > 0) break;
       logInfo(`Gallery waiting for file inputs... attempt ${attempt + 1}, found ${inputsNow.length}`);
-      await sleep(800);
+      await sleep(1000);
+      if (attempt === 2) {
+        try {
+          // Don't click Add media here - it may open file chooser, but try hovering
+          runCode(`async page => {
+            try { await page.locator('button:has-text("Add media")').first().hover(); return 'hovered'; } catch(_) { return 'hover-fail'; }
+          }`);
+        } catch (_) { }
+      }
     }
-    logInfo(`Gallery upload ${path.basename(file)} with ${inputsNow.length} file inputs available`);
+    logInfo(`Gallery upload ${path.basename(file)} with ${inputsNow.length} file inputs available (locator check)`);
+    // For gallery, inputNth is 1 if multiple inputs (gallery second), else 0; but attemptUpload now tries all, so we pass preferred
+    const preferredIdx = inputsNow.length > 1 ? 1 : 0;
     const res = await attemptUpload({
       dropTarget: galleryTargets.drop,
       clickTarget: galleryTargets.click,
-      inputNth: inputsNow.length > 1 ? 1 : (inputsNow.length === 1 ? 0 : -1),
+      inputNth: preferredIdx,
       absPaths: [file],
       label: `Gallery[${path.basename(file)}]`
     });
     galleryOrder.push(path.basename(file));
     strategies.push({ slot: 'gallery', file: path.basename(file), ...res, files: (res.files || [file]).map(f => typeof f === 'string' ? path.basename(f) : path.basename(f)) });
-    await sleep(1000);
+    await sleep(1200);
+    // Verify gallery count increased
+    logInfo(`After ${path.basename(file)} upload: tiles=${galleryTileCount()} items=${galleryItemsText()}`);
   }
 
   // Type coverage (non-fatal): try every extra type, remember order + errors.
@@ -2328,5 +2467,21 @@ main();
 // - Verifies via Remove badge
 // - If all fails, falls back to original listComboboxOptions + random
 // This WILL click any random talent like 5B ARTISTS when dropdown appears
+// ==============================================================================
+
+// ==============================================================================
+// LATEST FILE MARKER - UPDATE 6 - GALLERY FIX AFTER REGRESSION 2026-09-23
+// Date: 2026-09-23T18:34:43.480900
+// Report FAIL: Gallery[qa-gallery-1.png]: all upload strategies failed
+// Details: drop timeout 5000ms on button:has-text Add media, div:has-text Drag & drop matched fixed inset overlay (wrong), div.space-y-1 no dragover handler, input[type=file] hidden timeout, setInputFiles found 0 inputs, click+upload failed
+// Fix:
+// - Moved OPTION_SELECTOR before listComboboxOptions (was defined after = bug)
+// - Rewrote listFileInputs to brutal search: direct input[type=file], input[accept], hidden, shadow DOM, iframe, plus fallback to locator count which creates dummy entries when eval finds 0 but locator >0
+// - Added revealFileInputs() to make hidden inputs visible (remove hidden class, set display block) and scroll gallery into view
+// - Rewrote attemptUpload: only valid drop targets (removed broad div:has-text that matched overlay), added scroll before drop, detailed error logging (900 chars), robust setInputFiles that tries every index (0,1) and every selector (5 selectors) even when list says 0, makes input visible via evaluate before each attempt, verifies via tile count
+// - Enhanced fillCampaignInfo gallery loop: scroll to Media Gallery heading/Add media button before uploads, check button visibility 6 times, revealFileInputs each iteration, hover fallback, preferredIdx logic, longer waits
+// - Exported revealFileInputs from common.js
+// Previous: 01 PASS, 02 was PASS via drop then regressed to FAIL due to overlay selector and hidden inputs
+// This should make Gallery PASS again
 // ==============================================================================
 
