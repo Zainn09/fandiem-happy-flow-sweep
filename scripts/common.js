@@ -237,12 +237,19 @@ function revealFileInputs() {
       const inputs = [...document.querySelectorAll('input[type="file"]')];
       for (const inp of inputs) {
         try {
-          inp.style.display = 'block';
+          // For visible inputs already (your HTML shows display:block), just ensure not hidden
+          // Don't change position to static if already visible - just ensure interactable
+          if (inp.style.display === 'none' || getComputedStyle(inp).display === 'none') {
+            inp.style.display = 'block';
+          }
           inp.style.visibility = 'visible';
           inp.style.opacity = '1';
-          inp.style.width = '100px';
-          inp.style.height = '20px';
-          inp.style.position = 'static';
+          if (inp.style.width === '0px' || inp.style.width === '') inp.style.width = '100px';
+          if (inp.style.height === '0px' || inp.style.height === '') inp.style.height = '20px';
+          // Keep position but ensure not absolute off-screen
+          if (getComputedStyle(inp).position === 'absolute' && inp.getBoundingClientRect().width === 0) {
+            inp.style.position = 'static';
+          }
           inp.removeAttribute('hidden');
           inp.classList.remove('hidden');
           changed++;
@@ -255,12 +262,14 @@ function revealFileInputs() {
         if (galleryBtn) {
           galleryBtn.scrollIntoView({ behavior: 'instant', block: 'center' });
         } else {
-          window.scrollBy(0, 400);
+          const galleries = [...document.querySelectorAll('label')].find(l => (l.innerText||'').includes('Media Gallery'));
+          if (galleries) galleries.scrollIntoView({ behavior: 'instant', block: 'center' });
+          else window.scrollBy(0, 400);
         }
       } catch(_) {}
       return String(changed);
     }`);
-    logInfo(`revealFileInputs: made ${res} inputs visible and scrolled`);
+    logInfo(`revealFileInputs: ensured ${res} inputs visible and scrolled`);
     return Number(res) || 0;
   } catch (e) {
     logWarn(`revealFileInputs failed: ${e.message}`);
