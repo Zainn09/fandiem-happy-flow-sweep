@@ -1,0 +1,400 @@
+"""
+common.py — Python port of common.js
+Wraps @playwright/cli (same Chrome extension session) but from Python.
+Keeps the same happy-flow logic, now driven by Python.
+
+Usage: from common import *
+"""
+import json
+import pathlib
+import subprocess
+import sys
+import time
+import os
+import re
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+CONFIG_PATH = ROOT / "config.json"
+config = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+resultsDir = ROOT / "results"
+resultsDir.mkdir(parents=True, exist_ok=True)
+
+def get_cli_runner():
+    cli_js = ROOT / "node_modules" / "@playwright" / "cli" / "playwright-cli.js"
+    if cli_js.exists():
+        return {"command": sys.executable, "prefix": [str(cli_js)], "shell": False}
+    local_name = "playwright-cli.cmd" if os.name == "nt" else "playwright-cli"
+    local = ROOT / "node_modules" / ".bin" / local_name
+    command = str(local) if local.exists() else local_name
+    return {"command": command, "prefix": [], "shell": os.name == "nt"}
+
+def cli(args, raw=False, allow_failure=False):
+    final = []
+    if config.get("sessionName"):
+        final.append(f"--session={config['sessionName']}")
+    if raw:
+        final.append("--raw")
+    final.extend(args)
+    runner = get_cli_runner()
+    cmd = [runner["command"]] + runner["prefix"] + final
+    result = subprocess.run(
+        cmd,
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        shell=runner["shell"],
+    )
+    stdout = result.stdout or ""
+    stderr = result.stderr or ""
+    if result.returncode != 0 and not allow_failure:
+        raise RuntimeError(f"playwright-cli failed (exit {result.returncode})\nARGS: {args}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}")
+    return {"code": result.returncode, "stdout": stdout, "stderr": stderr}
+
+def sleep(ms): time.sleep(ms/1000)
+def clean(v): return re.sub(r"\s+", " ", str(v or "")).strip()
+def write_json(name, data):
+    p = resultsDir / name
+    p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return str(p)
+def env(name, fallback): return os.environ.get(name, fallback)
+def stamp_now(): return time.strftime("%Y%m%d%H%M%S")
+def log_info(msg): print(f"  [info] {msg}")
+def log_warn(msg): print(f"  [warn] {msg}", file=sys.stderr)
+
+def locator(kind, value, options=None):
+    options = options or {}
+    if kind == "role":
+        opts = ", ".join(f'{k}: {json.dumps(v)}' for k,v in options.items())
+        return f'getByRole({json.dumps(value)}{", { "+opts+" }" if opts else ""})'
+    if kind == "label": return f'getByLabel({json.dumps(value)})'
+    if kind == "text": return f'getByText({json.dumps(value)}, {{ exact: true }})'
+    if kind == "placeholder": return f'getByPlaceholder({json.dumps(value)})'
+    if kind == "css": return f'locator({json.dumps(value)})'
+    raise ValueError(f"Unknown locator kind: {kind}")
+
+def click(target): cli(["click", target])
+def fill(target, value): cli(["fill", target, str(value)])
+def press(key): cli(["press", key])
+def goto(url): cli(["goto", url])
+def screenshot(filename): cli(["screenshot", f"--filename={filename}"], allow_failure=True)
+def eval_page(expr): return cli(["eval", expr], raw=True)["stdout"].strip()
+def run_code(code): return cli(["run-code", code], raw=True)["stdout"].strip()
+def tab_new(url=None): return cli(["tab-new", url] if url else ["tab-new"])["stdout"]
+def tab_list(): return cli(["tab-list"])["stdout"]
+
+def body_text(): return eval_page('() => (document.body ? document.body.innerText : "")')
+def current_url(): return eval_page('() => location.href')
+
+def assert_contains(text, value, label):
+    if str(value).lower() not in str(text).lower():
+        raise AssertionError(f'{label}: expected to find {json.dumps(value)}')
+def assert_absent(text, value, label):
+    if str(value).lower() in str(text).lower():
+        raise AssertionError(f'{label}: unexpected text {json.dumps(value)}')
+def heading(name): assert_contains(body_text(), name, "Screen")
+
+def resolve_asset(rel):
+    abs_path = (ROOT / rel).resolve()
+    if not abs_path.exists():
+        raise FileNotFoundError(f"Asset not found: {rel} (resolved {abs_path})")
+    return str(abs_path)
+def resolve_assets(lst): return [resolve_asset(p) for p in (lst or [])]
+
+def next_daily_number():
+    now = time.localtime()
+    yyyymmdd = f"{now.tm_year}{now.tm_mon:02d}{now.tm_mday:02d}"
+    f = resultsDir / f"run-counter-{yyyymmdd}.json"
+    n = 0
+    try:
+        n = int(json.loads(f.read_text(encoding="utf-8")).get("count", 0))
+    except: pass
+    n += 1
+    f.write_text(json.dumps({"date": yyyymmdd, "count": n}, indent=2), encoding="utf-8")
+    return yyyymmdd, n
+
+def build_sweep_title():
+    override = os.environ.get("SWEEP_TITLE", "").strip()
+    if override: return override
+    yyyymmdd, n = next_daily_number()
+    return f"{config['sweepTitlePrefix']}-{yyyymmdd}-{n:03d}"
+
+# ---- uploads ----
+def list_file_inputs():
+    try:
+        raw = eval_page("""() => {
+      const found=[]; const seen=new Set();
+      function collect(root){
+        try{
+          for(const el of [...root.querySelectorAll('input[type="file"]')]){
+            if(!seen.has(el)){seen.add(el); found.push({accept:el.getAttribute('accept')||'',name:el.getAttribute('name')||'',id:el.id||'',multiple:!!el.multiple,visible:(()=>{try{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;}catch(_){return false;}})(),selector:'input[type="file"]'})}
+          }
+          for(const el of [...root.querySelectorAll('input[accept]')].filter(e=>/image|video/.test(e.getAttribute('accept')||''))){
+            if(!seen.has(el)){seen.add(el); found.push({accept:el.getAttribute('accept')||'',name:el.getAttribute('name')||'',id:el.id||'',multiple:!!el.multiple,visible:(()=>{try{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;}catch(_){return false;}})(),selector:'input[accept]'})}
+          }
+          for(const el of [...root.querySelectorAll('input.hidden')].filter(e=>e.type==='file')){
+            if(!seen.has(el)){seen.add(el); found.push({accept:el.getAttribute('accept')||'',name:el.getAttribute('name')||'',id:el.id||'',multiple:!!el.multiple,visible:false,selector:'input.hidden'})}
+          }
+          for(const el of [...root.querySelectorAll('*')]){ if(el.shadowRoot) collect(el.shadowRoot); }
+        }catch(_){}
+      }
+      collect(document);
+      try{ for(const iframe of [...document.querySelectorAll('iframe')]){ try{ const d=iframe.contentDocument||iframe.contentWindow.document; if(d) collect(d);}catch(_){} } }catch(_){}
+      return JSON.stringify(found.map((f,i)=>({index:i,...f})));
+    }""")
+        if not raw or raw.strip() == "[]":
+            try:
+                cnt = int(run_code("async page => String(await page.locator('input[type=\"file\"]').count())").strip() or "0")
+                if cnt>0:
+                    log_info(f"list_file_inputs eval 0 but locator count={cnt}, creating dummy entries")
+                    return [{"index":i,"accept":"","name":"","id":"","multiple":False,"visible":False,"selector":"locator-count"} for i in range(cnt)]
+            except: pass
+        parsed = json.loads(raw or "[]")
+        if isinstance(parsed, list): return parsed
+        if isinstance(parsed, dict):
+            vals = list(parsed.values())
+            if vals and isinstance(vals[0], dict): return vals
+        return []
+    except Exception as e:
+        try: log_warn(f"list_file_inputs failed: {e}, returning []")
+        except: pass
+        return []
+
+def reveal_file_inputs():
+    try:
+        res = eval_page("""() => {
+      let c=0; for(const inp of [...document.querySelectorAll('input[type="file"]')]){
+        try{
+          if(inp.style.display==='none' || getComputedStyle(inp).display==='none') inp.style.display='block';
+          inp.style.visibility='visible'; inp.style.opacity='1';
+          if(inp.style.width==='0px'||inp.style.width==='') inp.style.width='100px';
+          if(inp.style.height==='0px'||inp.style.height==='') inp.style.height='20px';
+          if(getComputedStyle(inp).position==='absolute' && inp.getBoundingClientRect().width===0) inp.style.position='static';
+          inp.removeAttribute('hidden'); inp.classList.remove('hidden'); c++;
+        }catch(_){}
+      }
+      try{
+        const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media'));
+        if(b) b.scrollIntoView({behavior:'instant',block:'center'});
+        else{
+          const lab=[...document.querySelectorAll('label')].find(l=>(l.innerText||'').includes('Media Gallery'));
+          if(lab) lab.scrollIntoView({behavior:'instant',block:'center'}); else window.scrollBy(0,400);
+        }
+      }catch(_){}
+      return String(c);
+    }""")
+        log_info(f"reveal_file_inputs: ensured {res} inputs visible and scrolled")
+        return int(res or 0)
+    except Exception as e:
+        log_warn(f"reveal_file_inputs failed: {e}")
+        return 0
+
+def drop_files(target, abs_paths):
+    for p in abs_paths:
+        if not pathlib.Path(p).exists(): raise FileNotFoundError(f"File not found: {p}")
+    try:
+        return cli(["drop", target] + [f"--path={p}" for p in abs_paths])
+    except Exception as e:
+        res = cli(["drop", target] + [f"--path={p}" for p in abs_paths], allow_failure=True)
+        if res["code"] != 0:
+            raise RuntimeError(f"drop failed for target {target}: STDERR: {res['stderr']}\nSTDOUT: {res['stdout']}"[:1000])
+        return res
+
+def upload_files(abs_paths):
+    for p in abs_paths:
+        if not pathlib.Path(p).exists(): raise FileNotFoundError(f"File not found: {p}")
+    try:
+        return cli(["upload"] + abs_paths)
+    except Exception as e:
+        res = cli(["upload"] + abs_paths, allow_failure=True)
+        if res["code"] != 0:
+            raise RuntimeError(f"upload failed: STDERR={res['stderr'][:800]} STDOUT={res['stdout'][:800]}")
+        return res
+
+def set_input_files(css, abs_paths):
+    for p in abs_paths:
+        if not pathlib.Path(p).exists(): raise FileNotFoundError(f"File not found: {p}")
+    code = f"async page => {{ await page.locator({json.dumps(css)}).first().setInputFiles({json.dumps(abs_paths)}); return 'ok'; }}"
+    return run_code(code)
+
+def capture_visible_errors():
+    try:
+        raw = eval_page("""() => JSON.stringify([...document.querySelectorAll('[role="alert"], p[class*="red"], span[class*="red"], div[class*="red"], [class*="text-red"], [class*="error"]')].map(e=>(e.innerText||'').trim()).filter(t=>t && /required|invalid|failed|error|attention|must|missing|least one/i.test(t)).slice(0,20))""")
+        parsed = json.loads(raw or "[]")
+        if isinstance(parsed, list): return parsed
+        if isinstance(parsed, dict): return [v for v in parsed.values() if isinstance(v, str)]
+        return []
+    except:
+        return []
+
+def safe_join(arr, sep=" | "):
+    try:
+        if isinstance(arr, list): return sep.join(arr)
+        if isinstance(arr, dict): return sep.join(v for v in arr.values() if isinstance(v, str))
+        return str(arr or "")
+    except: return ""
+
+def gallery_items_text():
+    return eval_page("""() => { const m=(document.body.innerText||'').match(/(\\d+)\\s+items?/i); return m?m[0]:''; }""")
+def gallery_tile_count():
+    raw = eval_page("""() => String(document.querySelectorAll('img[src*="blob:"], img[src*="cloudinary"], img[src*="amazonaws"], video').length)""")
+    return int(re.sub(r"[^0-9]", "", raw) or 0) if raw else 0
+
+OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"][data-value], [data-slot="select-item"], [data-radix-collection-item]'
+
+def list_combobox_options():
+    try:
+        raw = eval_page(f"""() => JSON.stringify([...document.querySelectorAll({json.dumps(OPTION_SELECTOR)})].map(e=>({{text:(e.innerText||'').trim().slice(0,160),html:e.innerHTML.trim().slice(0,400)}})).filter(o=>o.text).slice(0,40))""")
+        parsed = json.loads(raw or "[]")
+        if isinstance(parsed, list): return parsed
+        if isinstance(parsed, dict): return list(parsed.values())
+        return []
+    except: return []
+
+def combo_norm(v): return re.sub(r"[^a-z0-9]", "", str(v or "").lower())
+def match_option_index(options, wanted):
+    if not wanted or not str(wanted).strip(): return 0
+    w = combo_norm(wanted)
+    idx = next((i for i,o in enumerate(options) if combo_norm(o.get("text",""))==w), -1)
+    if idx==-1: idx = next((i for i,o in enumerate(options) if w in combo_norm(o.get("text",""))), -1)
+    if idx==-1: idx = next((i for i,o in enumerate(options) if combo_norm(o.get("text","")) in w and len(combo_norm(o.get("text","")))>2), -1)
+    return idx
+def fill_popup_search(text):
+    code = f"""async page => {{
+    const visible=el=>!!el && el.offsetParent!==null && !el.readOnly && !el.disabled;
+    const pick=()=>{{ const f=[...document.querySelectorAll('input[cmdk-input], input[placeholder*="Search" i]')].find(visible); if(f) return f; const b=[...document.querySelectorAll('input')].filter(e=>visible(e)&&(e.type==='text'||e.type===''||e.type==='search')); return b[b.length-1]||null; }};
+    const el=pick(); if(!el) return 'no-input'; await el.click(); await el.fill({json.dumps(str(text))}); return 'ok';
+  }}"""
+    return run_code(code)
+
+def select_combobox(combobox_target, preferred_name="", label="Combobox"):
+    name = label or "Combobox"
+    log_info(f"{name}: clicking {combobox_target}")
+    click(combobox_target)
+    sleep(1500)
+    try:
+        run_code("""async page => {
+      const b=document.querySelector('button[role="combobox"]')||[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Select talents')||(x.innerText||'').includes('Select one or more charities'));
+      if(b){b.click();return 'clicked';} return 'no-btn';
+    }""")
+        sleep(1000)
+    except: pass
+    want = str(preferred_name or "").strip()
+    log_info(f"{name}: dropdown should be open, want={want or '(any random)'}")
+    js_click = """
+    async page => {
+      const find=()=>{
+        for(const sel of ['[role="option"]','[data-slot="select-item"]','div[data-value]','[data-radix-collection-item]','li[role="option"]','div[role="option"]']){
+          try{ const els=[...document.querySelectorAll(sel)].filter(e=>{const t=(e.innerText||'').trim(); return t.length>3&&t.length<100&&(t.includes('@')||t.includes('ARTISTS')||t.includes('3OH')||/^[A-Z0-9 ]+$/.test(t.slice(0,20)));}); if(els.length) return {found:true,sel,count:els.length}; }catch(e){}
+        }
+        try{ const at=[...document.querySelectorAll('div')].filter(d=>{const t=(d.innerText||'').trim();const r=d.getBoundingClientRect();return t.includes('@')&&t.length<80&&r.width>100&&r.height>10&&r.top>100;}).slice(0,10); if(at.length) return {found:true,sel:'div-with-@',count:at.length}; }catch(e){}
+        return {found:false,count:0};
+      };
+      const chk=find(); if(!chk.found) return 'no-options:'+JSON.stringify(chk).slice(0,300);
+      try{
+        for(const sel of ['[role="option"]','[data-slot="select-item"]','div[data-value]']){
+          const els=[...document.querySelectorAll(sel)]; if(els.length){ const idx=Math.floor(Math.random()*Math.min(els.length,10)); const tgt=els[idx]||els[0]; tgt.scrollIntoView({block:'center'}); await new Promise(r=>setTimeout(r,200)); tgt.click(); return 'clicked:'+idx+':'+(tgt.innerText||'').slice(0,60)+':via='+sel; }
+        }
+        const at=[...document.querySelectorAll('div')].filter(d=>{const t=(d.innerText||'').trim();const r=d.getBoundingClientRect();return t.includes('@')&&t.length<80&&r.width>100;}); if(at.length){ const idx=Math.floor(Math.random()*Math.min(at.length,10)); const tgt=at[idx]||at[0]; tgt.click(); return 'clicked-at:'+idx+':'+(tgt.innerText||'').slice(0,50); }
+        return 'no-click-target';
+      }catch(e){ return 'error:'+e.message; }
+    }
+    """
+    for attempt in range(5):
+        try:
+            res = run_code(js_click)
+            log_info(f"{name}: JS click attempt {attempt+1}: {res}")
+            if str(res).startswith("clicked"):
+                sleep(1200)
+                try:
+                    ver = eval_page("""() => JSON.stringify({badges:[...document.querySelectorAll('[aria-label^="Remove"]')].map(e=>e.getAttribute('aria-label')).slice(0,2),hasSelect:!![...document.querySelectorAll('button')].find(b=>(b.innerText||'').includes('Select talents'))})""")
+                    log_info(f"{name}: verify {ver}")
+                    if "Remove" in ver: pass
+                except: pass
+                chosen = ":".join(str(res).split(":")[2:]) or "Random Talent"
+                return {"index":0,"text":chosen,"innerHTML":"","optionsCount":1,"options":[chosen],"filteredBy":"js-any"}
+        except Exception as e:
+            log_warn(f"{name}: attempt {attempt+1} failed {e}")
+        sleep(1000)
+        if attempt==2:
+            try: click(combobox_target); sleep(1000)
+            except: pass
+    try:
+        opts = list_combobox_options()
+        if opts:
+            import random
+            idx = random.randint(0, min(len(opts),10)-1)
+            chosen = opts[idx]
+            log_info(f"{name}: fallback clicking [{idx}]: {chosen['text']}")
+            run_code(f"async page => {{ const els=[...document.querySelectorAll('[role=\"option\"], [data-slot=\"select-item\"]')]; if(els[{idx}]) els[{idx}].click(); return 'ok'; }}")
+            sleep(800)
+            return {"index":idx,"text":chosen["text"],"innerHTML":chosen.get("html",""),"optionsCount":len(opts),"options":[o["text"] for o in opts],"filteredBy":"fallback"}
+    except Exception as e:
+        log_warn(f"{name}: fallback failed {e}")
+    raise RuntimeError(f"{name}: Could not click any option after all attempts. Body: {body_text()[:800]}")
+
+# ---- other helpers ----
+def fill_rich_text_last(value): fill('locator(\'[contenteditable="true"]\').last()', str(value))
+def wait_for_text(text, timeout=30000, poll=500):
+    end=time.time()+timeout/1000
+    while time.time()<end:
+        if str(text).lower() in body_text().lower(): return True
+        sleep(poll)
+    return False
+def parse_json(raw, fallback):
+    try:
+        v=json.loads(str(raw or "").strip() or "null")
+        if v is None: return fallback
+        if isinstance(fallback, list) and isinstance(v, dict):
+            vals=list(v.values())
+            return vals if vals else fallback
+        return v
+    except: return fallback
+def read_values(m): return parse_json(eval_page(f"() => JSON.stringify(Object.fromEntries(Object.entries({json.dumps(m)}).map(([k,sel])=>{{const el=document.querySelector(sel);return [k,el?(el.value!==undefined&&el.value!==null?el.value:(el.innerText||'')):null];}}))"), {})
+def switch_list():
+    return parse_json(eval_page(r"""() => JSON.stringify([...document.querySelectorAll('button[role="switch"]')].map((el,i)=>{
+    const parents=[]; let n=el.parentElement; for(let d=0;d<5&&n;d++){parents.push((n.innerText||'').replace(/\s+/g,' ').trim()); n=n.parentElement;}
+    return {i,checked:el.getAttribute('aria-checked')==='true',label:((el.parentElement&&el.parentElement.innerText)||'').split('\n').map(s=>s.trim()).filter(Boolean)[0]||'',parents:parents.filter(Boolean)}
+  }))"""), [])
+def find_switch(label):
+    want=str(label).lower()
+    cands=[]
+    for s in switch_list():
+        hit=sorted([{"t":t,"len":len(t)} for t in s.get("parents",[]) if want in t.lower()], key=lambda x:x["len"])
+        if hit: cands.append({**s,"parentText":hit[0]["t"]})
+    return sorted(cands, key=lambda x: len(x["parentText"]))[0] if cands else None
+def ensure_switch(label, desired):
+    before=find_switch(label)
+    if not before: raise RuntimeError(f"Switch not found: {label}")
+    if before["checked"]==bool(desired):
+        log_info(f'switch "{label}" already {"ON" if desired else "OFF"}'); return before
+    run_code(f"async page => {{ await page.locator('button[role=\"switch\"]').nth({before['i']}).click(); return 'ok'; }}")
+    sleep(500)
+    after=find_switch(label)
+    if not after: raise RuntimeError(f"Switch {label} disappeared")
+    if after["checked"]!=bool(desired): raise RuntimeError(f"Switch {label} did not reach {'ON' if desired else 'OFF'}")
+    log_info(f'switch "{label}": {"ON" if before["checked"] else "OFF"} -> {"ON" if after["checked"] else "OFF"}')
+    return after
+def entry_tier_snapshot():
+    return parse_json(eval_page(r"""() => JSON.stringify([...document.querySelectorAll('input[name^="entryTiers"][name$=".entries"]')].map(el=>{
+    const name=el.getAttribute('name')||''; const m=name.match(/tiers\.(\d+)\.entries/); const idx=m?Number(m[1]):-1; const art=el.closest('article')||document; const badge=art.querySelector('span[data-slot="badge"]'); const price=art.querySelector('input[name="entryTiers.tiers.'+idx+'.price"]'); const impact=art.querySelector('input[name="entryTiers.tiers.'+idx+'.impact"]');
+    return {idx,badge:badge?(badge.innerText||'').replace(/\s+/g,' ').trim():'',locked:!!art.querySelector('svg.lucide-lock'),disabled:!!el.disabled||el.hasAttribute('readonly'),entries:el.value,price:price?price.value:'',impact:impact?impact.value:'',name}
+  }))"""), [])
+def review_snapshot():
+    s=parse_json(eval_page(r"""() => JSON.stringify([...document.querySelectorAll('p.truncate.text-paragraph-small.font-medium')].map(h=>{
+    const card=h.closest('div.overflow-hidden')||h.parentElement; if(!card) return null; const rows=[...card.querySelectorAll('dl > div')].map(d=>{const dt=d.querySelector('dt');const dd=d.querySelector('dd');return {label:dt?(dt.innerText||'').replace(/\s+/g,' ').trim():'',value:dd?(dd.innerText||'').replace(/\s+/g,' ').trim():'',images:dd?[...dd.querySelectorAll('img')].map(i=>i.getAttribute('src')||''):[]};}); const text=(card.innerText||'').replace(/\s+/g,' ').trim(); return {section:(h.innerText||'').replace(/\s+/g,' ').trim(),rows,empty:/No .* added\./i.test(text),needsAttention:/needs attention/i.test(text),text:text.slice(0,1500)};}).filter(Boolean))"""), [])
+    import re
+    m=re.search(r"(\d+)\s+steps?\s+need your attention", body_text(), re.I)
+    return {"sections":s,"stepsNeedingAttention":int(m.group(1)) if m else 0,"attentionBanner":bool(re.search(r"needs your attention", body_text(), re.I))}
+def sweeps_row_snapshot(title):
+    return parse_json(eval_page(f"""() => {{
+    const rows=[...document.querySelectorAll('tr')].filter(tr=>(tr.innerText||'').includes({json.dumps(title)}));
+    if(!rows.length) return JSON.stringify({{found:false}});
+    const tr=rows[0]; const cells=[...tr.querySelectorAll('td')].map(td=>(td.innerText||'').replace(/\\s+/g,' ').trim());
+    const link=tr.querySelector('a[aria-label="Sweeps link"]'); const free=tr.querySelector('a[aria-label="Free entry link"]'); const track=tr.querySelector('a[aria-label="Tracking link"]'); const titleEl=tr.querySelector('td p[title]');
+    return JSON.stringify({{found:true,titleCell:titleEl?(titleEl.getAttribute('title')||'').trim():(cells[0]||''),cells,text:(tr.innerText||'').replace(/\\s+/g,' ').trim(),sweepsLink:link?link.href:'',freeEntryLink:free?free.href:'',trackingLink:track?track.href:''}});
+  }}"""), {"found":False})
+# network etc minimal for python - keep stub
+def network_mark(options=None): return 0
+def network_since(mark, options=None): return []
+def network_summary(entries): return []
+def request_details(idx): return ""
