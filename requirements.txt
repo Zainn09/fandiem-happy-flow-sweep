@@ -1,0 +1,4 @@
+# Python happy-flow - same Chrome extension, now driven from Python
+# No extra pip deps needed beyond stdlib because we wrap @playwright/cli via subprocess (same as Node)
+# If you want native Playwright Python instead, uncomment:
+# playwright==1.48.0
