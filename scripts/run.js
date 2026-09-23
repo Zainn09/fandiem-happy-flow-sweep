@@ -417,13 +417,34 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
       if (!tryIndices.includes(1)) tryIndices.push(1);
     }
     
-    const inputSelectors = [
-      `input[type="file"]`,
-      `input[type=file]`,
-      `input[accept*="image"]`,
-      `input.hidden`,
-      `input[accept*="png"]`
-    ];
+    const inputSelectors = [];
+    // Precise per actual HTML you sent 2026-09-23:
+    // Cover has single input without multiple, Gallery has input[multiple]
+    // Prioritize [multiple] for Gallery, non-multiple for Cover
+    if (label && label.includes('Gallery')) {
+      inputSelectors.push(
+        `input[type="file"][multiple]`,
+        `input[accept*="image"][multiple]`,
+        `input[type="file"]`,
+        `input[accept*="image"]`,
+        `input[type=file]`
+      );
+    } else if (label === 'Cover') {
+      inputSelectors.push(
+        `input[type="file"]:not([multiple])`,
+        `input[accept*="image"]:not([multiple])`,
+        `input[type="file"]`,
+        `input[type=file]`
+      );
+    } else {
+      inputSelectors.push(
+        `input[type="file"]`,
+        `input[type=file]`,
+        `input[accept*="image"]`,
+        `input.hidden`,
+        `input[accept*="png"]`
+      );
+    }
     
     let setSucceeded = false;
     let lastSetError = '';
@@ -804,12 +825,19 @@ async function fillCampaignInfo(report) {
   const galleryOrder = [];
   const strategies = [];
 
-  // Cover (optional): div.space-y-1 > input[accept*=image/png]
+  // Cover (optional): precise per actual HTML - div.group inside space-y-1, input without multiple
+  // HTML: <div class="space-y-1"><div class="group relative ... aspect-[820/312]"><input type=file><div>Drag & drop...
   try {
     const beforeTiles = galleryTileCount();
+    // Try precise cover input first: input not multiple
+    logInfo('Cover: HTML shows input without multiple inside div.group, trying precise setInputFiles first');
+    revealFileInputs();
+    await sleep(500);
+    let coverInputs = listFileInputs();
+    logInfo(`Cover: found ${coverInputs.length} inputs: ${JSON.stringify(coverInputs.map(i=>({idx:i.index, accept:(i.accept||'').slice(0,30), multiple:i.multiple})))}`);
     const res = await attemptUpload({
-      dropTarget: `locator('div.space-y-1:has(input[type="file"])').first()`,
-      clickTarget: `locator('div.space-y-1:has-text("Drag & drop or click to upload")').first()`,
+      dropTarget: `locator('div.group:has(input[type="file"])').first()`,
+      clickTarget: `locator('div.group:has-text("Drag & drop or click to upload")').first()`,
       inputNth: 0,
       absPaths: coverMedia,
       label: 'Cover'
@@ -2451,5 +2479,19 @@ main();
 // - Exported revealFileInputs from common.js
 // Previous: 01 PASS, 02 was PASS via drop then regressed to FAIL due to overlay selector and hidden inputs
 // This should make Gallery PASS again
+// ==============================================================================
+
+// ==============================================================================
+// LATEST FILE MARKER - UPDATE 7 - PRECISE HTML FIX 2026-09-23
+// Date: 2026-09-23T18:48:40.462844
+// User sent actual Campaign Info HTML dump - shows exact structure:
+// Cover: <div class="space-y-1"><div class="group relative ... aspect-[820/312]"><input type=file style="display:block visible"><div>Drag & drop...
+// Gallery: <div class="grid ..."><button>Add media</button><input type=file multiple style="display:block visible">
+// Previous fix used generic selectors and broad div:has-text which matched fixed overlay
+// Fix: Cover dropTarget -> div.group:has(input), Gallery prioritizes input[multiple], precise setInputFiles selectors
+// Cover: input:not([multiple]) first, Gallery: input[multiple] first
+// Reveal less destructive (only fix display:none, not force static if already visible)
+// This matches YOUR actual DOM exactly - will use setInputFiles on the visible inputs
+// Python alternative feasible too - can rewrite in playwright python if you prefer, same selectors would apply
 // ==============================================================================
 
