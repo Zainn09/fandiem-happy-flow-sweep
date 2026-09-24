@@ -9,7 +9,10 @@
     "test": "node scripts/run.js",
     "dry": "node scripts/run.js --dry-run",
     "report": "node scripts/report.js",
-    "detach": "node scripts/detach.js"
+    "detach": "node scripts/detach.js",
+    "report:py": "python scripts/report.py",
+    "test:py": "python scripts/run.py",
+    "dry:py": "python scripts/run.py --dry-run"
   },
   "devDependencies": {
     "@playwright/cli": "latest",

@@ -143,14 +143,30 @@ def list_file_inputs():
       try{ for(const iframe of [...document.querySelectorAll('iframe')]){ try{ const d=iframe.contentDocument||iframe.contentWindow.document; if(d) collect(d);}catch(_){} } }catch(_){}
       return JSON.stringify(found.map((f,i)=>({index:i,...f})));
     }""")
-        if not raw or raw.strip() == "[]":
+        # Use cleaned raw for check too
+        raw_for_check = str(raw or "").strip().strip('"').strip("'").strip()
+        if not raw_for_check or raw_for_check == "[]":
             try:
                 cnt = int(run_code("async page => String(await page.locator('input[type=\"file\"]').count())").strip() or "0")
                 if cnt>0:
                     log_info(f"list_file_inputs eval 0 but locator count={cnt}, creating dummy entries")
                     return [{"index":i,"accept":"","name":"","id":"","multiple":False,"visible":False,"selector":"locator-count"} for i in range(cnt)]
             except: pass
-        parsed = json.loads(raw or "[]")
+        # raw may be '"[{"index":0}]"' with outer quotes from --raw, handle it
+        raw_clean = str(raw or "").strip()
+        # If raw is quoted string like '"[]"' or "'[]'", unwrap once
+        if len(raw_clean) >= 2 and raw_clean[0] in ('"', "'") and raw_clean[-1] == raw_clean[0]:
+            try:
+                # Try to parse as JSON string containing JSON
+                inner = json.loads(raw_clean)
+                if isinstance(inner, str):
+                    raw_clean = inner
+            except:
+                # Strip outer quotes manually
+                raw_clean = raw_clean[1:-1]
+        # Debug: uncomment to see raw
+        # log_info(f"list_file_inputs raw={raw_clean[:300]}")
+        parsed = json.loads(raw_clean or "[]")
         if isinstance(parsed, list): return parsed
         if isinstance(parsed, dict):
             vals = list(parsed.values())
@@ -184,8 +200,11 @@ def reveal_file_inputs():
       }catch(_){}
       return String(c);
     }""")
-        log_info(f"reveal_file_inputs: ensured {res} inputs visible and scrolled")
-        return int(res or 0)
+        # res may be '"2"' with quotes from eval -- strip non-digits
+        clean_res = re.sub(r'[^0-9]', '', str(res) or '')
+        num = int(clean_res or 0)
+        log_info(f"reveal_file_inputs: ensured {num} inputs visible and scrolled (raw={repr(res)[:40]})")
+        return num
     except Exception as e:
         log_warn(f"reveal_file_inputs failed: {e}")
         return 0
@@ -221,7 +240,21 @@ def set_input_files(css, abs_paths):
 def capture_visible_errors():
     try:
         raw = eval_page("""() => JSON.stringify([...document.querySelectorAll('[role="alert"], p[class*="red"], span[class*="red"], div[class*="red"], [class*="text-red"], [class*="error"]')].map(e=>(e.innerText||'').trim()).filter(t=>t && /required|invalid|failed|error|attention|must|missing|least one/i.test(t)).slice(0,20))""")
-        parsed = json.loads(raw or "[]")
+        # raw may be '"[{"index":0}]"' with outer quotes from --raw, handle it
+        raw_clean = str(raw or "").strip()
+        # If raw is quoted string like '"[]"' or "'[]'", unwrap once
+        if len(raw_clean) >= 2 and raw_clean[0] in ('"', "'") and raw_clean[-1] == raw_clean[0]:
+            try:
+                # Try to parse as JSON string containing JSON
+                inner = json.loads(raw_clean)
+                if isinstance(inner, str):
+                    raw_clean = inner
+            except:
+                # Strip outer quotes manually
+                raw_clean = raw_clean[1:-1]
+        # Debug: uncomment to see raw
+        # log_info(f"list_file_inputs raw={raw_clean[:300]}")
+        parsed = json.loads(raw_clean or "[]")
         if isinstance(parsed, list): return parsed
         if isinstance(parsed, dict): return [v for v in parsed.values() if isinstance(v, str)]
         return []
@@ -246,7 +279,21 @@ OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"]
 def list_combobox_options():
     try:
         raw = eval_page(f"""() => JSON.stringify([...document.querySelectorAll({json.dumps(OPTION_SELECTOR)})].map(e=>({{text:(e.innerText||'').trim().slice(0,160),html:e.innerHTML.trim().slice(0,400)}})).filter(o=>o.text).slice(0,40))""")
-        parsed = json.loads(raw or "[]")
+        # raw may be '"[{"index":0}]"' with outer quotes from --raw, handle it
+        raw_clean = str(raw or "").strip()
+        # If raw is quoted string like '"[]"' or "'[]'", unwrap once
+        if len(raw_clean) >= 2 and raw_clean[0] in ('"', "'") and raw_clean[-1] == raw_clean[0]:
+            try:
+                # Try to parse as JSON string containing JSON
+                inner = json.loads(raw_clean)
+                if isinstance(inner, str):
+                    raw_clean = inner
+            except:
+                # Strip outer quotes manually
+                raw_clean = raw_clean[1:-1]
+        # Debug: uncomment to see raw
+        # log_info(f"list_file_inputs raw={raw_clean[:300]}")
+        parsed = json.loads(raw_clean or "[]")
         if isinstance(parsed, list): return parsed
         if isinstance(parsed, dict): return list(parsed.values())
         return []

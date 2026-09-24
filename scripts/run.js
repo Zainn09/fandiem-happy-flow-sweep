@@ -428,10 +428,7 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
         `div.grid input[type="file"][multiple]`,
         `div.grid input[multiple]`,
         `input[type="file"][multiple]`,
-        `input[accept*="image"][multiple]`,
-        `input[type="file"]`,
-        `input[accept*="image"]`,
-        `input[type=file]`
+        `input[accept*="image"][multiple]`
       );
     } else if (label === 'Cover') {
       inputSelectors.push(
