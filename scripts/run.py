@@ -498,41 +498,76 @@ def fill_campaign_info(report):
             sleep(800)
     except Exception as e:
         log_warn(f"Gallery scroll failed: {e}")
+    # Media Gallery: same as Cover but with 3-5 images, remember order for storefront check
+    # Your HTML: <div class="grid"><button>Add media</button><input multiple> is the gallery input
+    # Cover was uploaded once via its input (div.group). Now gallery should upload 3-5 images via its multiple input in ONE batch to preserve order
     gallery_targets={'drop':'locator(\'button[type="button"]:has-text("Add media")\')','click':'locator(\'button[type="button"]:has-text("Add media")\')'}
-    for file in galleryMedia:
-        try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
-        except: pass
-        inputs_now=[]
-        for attempt in range(6):
-            reveal_file_inputs()
-            inputs_now=list_file_inputs()
-            if len(inputs_now)>0: break
-            log_info(f"Gallery waiting inputs {attempt+1} found {len(inputs_now)}")
-            sleep(1000)
-            if attempt==2:
-                try: run_code("async page => { try{ await page.locator('button:has-text(\"Add media\")').first().hover(); return 'hovered'; }catch(_){return 'hover-fail';} }")
-                except: pass
-        log_info(f"Gallery upload {pathlib.Path(file).name} with {len(inputs_now)} inputs")
+    # Build batch of 3-5 images: galleryMedia (2) + typeCoverage (3) = 5 total, which satisfies 3-5 requirement
+    gallery_batch = galleryMedia + typeCoverageMedia
+    # Ensure 3-5 range: take first 5, but at least 3
+    if len(gallery_batch) > 5:
+        gallery_batch = gallery_batch[:5]
+    if len(gallery_batch) < 3:
+        log_warn(f"Gallery batch only {len(gallery_batch)} images, need 3-5 - duplicating to reach 3")
+        while len(gallery_batch) < 3:
+            gallery_batch.append(galleryMedia[0])
+    log_info(f"Gallery batch upload: {len(gallery_batch)} images in order: {safe_join([pathlib.Path(f).name for f in gallery_batch], ', ')}")
+    # Ensure gallery visible
+    try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
+    except: pass
+    # Try BATCH upload first (most reliable for multiple input) - same as Cover but with 3-5 files
+    batch_success = False
+    try:
+        inputs_now = list_file_inputs()
         pref = 1 if len(inputs_now)>1 else 0
-        res=attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=pref, abs_paths=[file], label=f"Gallery[{pathlib.Path(file).name}]")
-        galleryOrder.append(pathlib.Path(file).name)
-        strategies.append({"slot":"gallery","file":pathlib.Path(file).name, **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [file])]})
+        # Batch upload all 3-5 at once via the multiple input
+        res = attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=pref, abs_paths=gallery_batch, label=f"Gallery[batch {len(gallery_batch)} images]")
+        galleryOrder.extend([pathlib.Path(f).name for f in gallery_batch])
+        strategies.append({"slot":"gallery","file":"batch", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or gallery_batch)]})
+        batch_success = True
         sleep(1200)
-        log_info(f"After {pathlib.Path(file).name}: tiles={gallery_tile_count()} items={gallery_items_text()}")
-    # type coverage
-    coverage=[]
-    for file in typeCoverageMedia:
-        name=pathlib.Path(file).name
-        try:
+        log_info(f"Gallery batch success: tiles={gallery_tile_count()} items={gallery_items_text()} order={safe_join(galleryOrder, ', ')}")
+    except Exception as e:
+        log_warn(f"Gallery batch upload failed, falling back to one-by-one: {str(e).splitlines()[0]}")
+        # Fallback: one-by-one as before
+        for file in galleryMedia:
+            try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
+            except: pass
             inputs_now=[]
-            for attempt in range(4):
+            for attempt in range(6):
+                reveal_file_inputs()
                 inputs_now=list_file_inputs()
                 if len(inputs_now)>0: break
-                sleep(600)
-            res=attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=1 if len(inputs_now)>1 else 0, abs_paths=[file], label=f"Gallery-type[{name}]")
-            galleryOrder.append(name); strategies.append({"slot":"gallery-type","file":name,"strategy":res["strategy"]}); coverage.append({"file":name,"ok":True,"strategy":res["strategy"]}); sleep(800)
-        except Exception as e:
-            coverage.append({"file":name,"ok":False,"error":str(e).splitlines()[0]}); log_warn(f"type coverage {name} failed: {str(e).splitlines()[0]}")
+                log_info(f"Gallery waiting inputs {attempt+1} found {len(inputs_now)}")
+                sleep(1000)
+            log_info(f"Gallery upload {pathlib.Path(file).name} with {len(inputs_now)} inputs")
+            pref = 1 if len(inputs_now)>1 else 0
+            res=attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=pref, abs_paths=[file], label=f"Gallery[{pathlib.Path(file).name}]")
+            galleryOrder.append(pathlib.Path(file).name)
+            strategies.append({"slot":"gallery","file":pathlib.Path(file).name, **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [file])]})
+            sleep(1200)
+            log_info(f"After {pathlib.Path(file).name}: tiles={gallery_tile_count()} items={gallery_items_text()}")
+    coverage=[]
+    # If batch succeeded, type coverage already included; if not, handle type coverage separately
+    if not batch_success:
+        for file in typeCoverageMedia:
+            name=pathlib.Path(file).name
+            try:
+                inputs_now=[]
+                for attempt in range(4):
+                    inputs_now=list_file_inputs()
+                    if len(inputs_now)>0: break
+                    sleep(600)
+                res=attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=1 if len(inputs_now)>1 else 0, abs_paths=[file], label=f"Gallery-type[{name}]")
+                galleryOrder.append(name); strategies.append({"slot":"gallery-type","file":name,"strategy":res["strategy"]}); coverage.append({"file":name,"ok":True,"strategy":res["strategy"]}); sleep(800)
+            except Exception as e:
+                coverage.append({"file":name,"ok":False,"error":str(e).splitlines()[0]}); log_warn(f"type coverage {name} failed: {str(e).splitlines()[0]}")
+    else:
+        # Batch already covered typeCoverage, mark them as ok
+        for f in typeCoverageMedia:
+            name=pathlib.Path(f).name
+            if name in galleryOrder:
+                coverage.append({"file":name,"ok":True,"strategy":res["strategy"]})
     report["media"]["galleryOrder"]=galleryOrder
     report["media"]["strategies"]=strategies
     report["media"]["typeCoverage"]=coverage

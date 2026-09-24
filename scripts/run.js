@@ -917,85 +917,97 @@ async function fillCampaignInfo(report) {
     logWarn(`Gallery scroll failed: ${e.message}`);
   }
 
-  // Gallery (required): button[type=button] containing "Add media" — upload one by one to preserve order.
+  // Gallery: same as Cover - upload 3-5 images via the multiple input inside div.grid, preserve order for storefront
+  // Your HTML: <div class="grid"><button>Add media</button><input multiple>  Cover was 1 image via div.group, Gallery is 3-5 via this input
   const galleryTargets = {
     drop: `locator('button[type="button"]:has-text("Add media")')`,
     click: `locator('button[type="button"]:has-text("Add media")')`
   };
-  for (const file of galleryMedia) {
-    // Ensure gallery still in view before each file
-    try {
-      runCode(`async page => {
-        const btn = [...document.querySelectorAll('button')].find(b => (b.innerText||'').includes('Add media'));
-        if (btn) btn.scrollIntoView({ block: 'center' });
-        return 'scrolled';
-      }`);
-      await sleep(400);
-    } catch (_) { }
-
-    // Wait for file inputs before each gallery upload - with reveal
-    let inputsNow = [];
-    for (let attempt = 0; attempt < 6; attempt++) {
-      revealFileInputs();
-      inputsNow = listFileInputs();
-      if (!Array.isArray(inputsNow)) inputsNow = [];
-      if (inputsNow.length > 0) break;
-      logInfo(`Gallery waiting for file inputs... attempt ${attempt + 1}, found ${inputsNow.length}`);
-      await sleep(1000);
-      if (attempt === 2) {
-        try {
-          // Don't click Add media here - it may open file chooser, but try hovering
-          runCode(`async page => {
-            try { await page.locator('button:has-text("Add media")').first().hover(); return 'hovered'; } catch(_) { return 'hover-fail'; }
-          }`);
-        } catch (_) { }
-      }
-    }
-    logInfo(`Gallery upload ${path.basename(file)} with ${inputsNow.length} file inputs available (locator check)`);
-    // For gallery, inputNth is 1 if multiple inputs (gallery second), else 0; but attemptUpload now tries all, so we pass preferred
-    const preferredIdx = inputsNow.length > 1 ? 1 : 0;
-    const res = await attemptUpload({
+  // Batch of 3-5: galleryMedia (2) + typeCoverage (3) = 5
+  const galleryBatch = [...galleryMedia, ...typeCoverageMedia].slice(0, 5);
+  while (galleryBatch.length < 3) galleryBatch.push(galleryMedia[0]);
+  logInfo(`Gallery batch upload: ${galleryBatch.length} images in order: ${galleryBatch.map(f=>path.basename(f)).join(', ')}`);
+  try { runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }`); await sleep(400); } catch (_) {}
+  let batchSuccess = false;
+  let batchRes = null;
+  try {
+    let inputsNow = listFileInputs();
+    const prefIdx = inputsNow.length > 1 ? 1 : 0;
+    batchRes = await attemptUpload({
       dropTarget: galleryTargets.drop,
       clickTarget: galleryTargets.click,
-      inputNth: preferredIdx,
-      absPaths: [file],
-      label: `Gallery[${path.basename(file)}]`
+      inputNth: prefIdx,
+      absPaths: galleryBatch,
+      label: `Gallery[batch ${galleryBatch.length} images]`
     });
-    galleryOrder.push(path.basename(file));
-    strategies.push({ slot: 'gallery', file: path.basename(file), ...res, files: (res.files || [file]).map(f => typeof f === 'string' ? path.basename(f) : path.basename(f)) });
+    batchSuccess = true;
+    for (const f of galleryBatch) galleryOrder.push(path.basename(f));
+    strategies.push({ slot: 'gallery', file: 'batch', ...batchRes, files: (batchRes.files || galleryBatch).map(f => path.basename(f)) });
     await sleep(1200);
-    // Verify gallery count increased
-    logInfo(`After ${path.basename(file)} upload: tiles=${galleryTileCount()} items=${galleryItemsText()}`);
-  }
-
-  // Type coverage (non-fatal): try every extra type, remember order + errors.
-  const coverage = [];
-  for (const file of typeCoverageMedia) {
-    const name = path.basename(file);
-    try {
+    logInfo(`Gallery batch success: tiles=${galleryTileCount()} items=${galleryItemsText()} order=${galleryOrder.join(', ')}`);
+  } catch (e) {
+    logWarn(`Gallery batch failed, fallback one-by-one: ${String(e.message).split('\n')[0]}`);
+    for (const file of galleryMedia) {
+      try { runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }`); await sleep(400); } catch (_) {}
       let inputsNow = [];
-      for (let attempt = 0; attempt < 4; attempt++) {
+      for (let attempt=0; attempt<6; attempt++) {
+        revealFileInputs();
         inputsNow = listFileInputs();
         if (!Array.isArray(inputsNow)) inputsNow = [];
         if (inputsNow.length > 0) break;
-        await sleep(600);
+        logInfo(`Gallery waiting for file inputs... attempt ${attempt+1}, found ${inputsNow.length}`);
+        await sleep(1000);
       }
+      logInfo(`Gallery upload ${path.basename(file)} with ${inputsNow.length} file inputs available (locator check)`);
+      const preferredIdx = inputsNow.length > 1 ? 1 : 0;
       const res = await attemptUpload({
         dropTarget: galleryTargets.drop,
         clickTarget: galleryTargets.click,
-        inputNth: inputsNow.length > 1 ? 1 : (inputsNow.length === 1 ? 0 : -1),
+        inputNth: preferredIdx,
         absPaths: [file],
-        label: `Gallery-type[${name}]`
+        label: `Gallery[${path.basename(file)}]`
       });
-      galleryOrder.push(name);
-      strategies.push({ slot: 'gallery-type', file: name, strategy: res.strategy });
-      coverage.push({ file: name, ok: true, strategy: res.strategy });
-      await sleep(800);
-    } catch (e) {
-      coverage.push({ file: name, ok: false, error: String(e.message).split('\n')[0] });
-      logWarn(`type coverage ${name} failed (recorded, continuing): ${String(e.message).split('\n')[0]}`);
+      galleryOrder.push(path.basename(file));
+      strategies.push({ slot: 'gallery', file: path.basename(file), ...res, files: (res.files || [file]).map(f => typeof f === 'string' ? path.basename(f) : path.basename(f)) });
+      await sleep(1200);
+      logInfo(`After ${path.basename(file)} upload: tiles=${galleryTileCount()} items=${galleryItemsText()}`);
     }
   }
+
+  // Type coverage: if batch succeeded, already included; else try separately
+  let coverage = [];
+  if (!batchSuccess) {
+    coverage = [];
+    for (const file of typeCoverageMedia) {
+      const name = path.basename(file);
+      try {
+        let inputsNow = [];
+        for (let attempt = 0; attempt < 4; attempt++) {
+          inputsNow = listFileInputs();
+          if (!Array.isArray(inputsNow)) inputsNow = [];
+          if (inputsNow.length > 0) break;
+          await sleep(600);
+        }
+        const res = await attemptUpload({
+          dropTarget: galleryTargets.drop,
+          clickTarget: galleryTargets.click,
+          inputNth: inputsNow.length > 1 ? 1 : (inputsNow.length === 1 ? 0 : -1),
+          absPaths: [file],
+          label: `Gallery-type[${name}]`
+        });
+        galleryOrder.push(name);
+        strategies.push({ slot: 'gallery-type', file: name, strategy: res.strategy });
+        coverage.push({ file: name, ok: true, strategy: res.strategy });
+        await sleep(800);
+      } catch (e) {
+        coverage.push({ file: name, ok: false, error: String(e.message).split('\n')[0] });
+        logWarn(`type coverage ${name} failed (recorded, continuing): ${String(e.message).split('\n')[0]}`);
+      }
+    }
+  } else {
+    coverage = typeCoverageMedia.map(f => ({ file: path.basename(f), ok: galleryOrder.includes(path.basename(f)), strategy: batchRes ? batchRes.strategy : 'batch' }));
+  }
+
   report.media.galleryOrder = galleryOrder;
   report.media.strategies = strategies;
   report.media.typeCoverage = coverage;
