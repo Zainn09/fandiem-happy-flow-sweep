@@ -292,7 +292,7 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
         # Precise selectors per your HTML
         selectors=[]
         if label and "Gallery" in label:
-            selectors.extend(['div.grid input[type="file"][multiple]','div.grid input[multiple]','input[type="file"][multiple]','input[accept*="image"][multiple]','input[type="file"]','input[accept*="image"]','input[type=file]'])
+            selectors.extend(['button:has-text("Add media") + input[type="file"]','div.grid > input[type="file"][multiple]','div.grid input[type="file"][multiple]','div.grid input[multiple]','input[type="file"][multiple]','input[accept*="image"][multiple]','input[type="file"]','input[accept*="image"]','input[type=file]'])
         elif label=="Cover":
             selectors.extend(['input[type="file"]:not([multiple])','input[accept*="image"]:not([multiple])','input[type="file"]','input[type=file]'])
         else:

@@ -423,6 +423,10 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
     // Prioritize [multiple] for Gallery, non-multiple for Cover
     if (label && label.includes('Gallery')) {
       inputSelectors.push(
+        `button:has-text("Add media") + input[type="file"]`,
+        `div.grid > input[type="file"][multiple]`,
+        `div.grid input[type="file"][multiple]`,
+        `div.grid input[multiple]`,
         `input[type="file"][multiple]`,
         `input[accept*="image"][multiple]`,
         `input[type="file"]`,
@@ -927,6 +931,13 @@ async function fillCampaignInfo(report) {
   const galleryBatch = [...galleryMedia, ...typeCoverageMedia].slice(0, 5);
   while (galleryBatch.length < 3) galleryBatch.push(galleryMedia[0]);
   logInfo(`Gallery batch upload: ${galleryBatch.length} images in order: ${galleryBatch.map(f=>path.basename(f)).join(', ')}`);
+  // Debug: dump grid HTML for your exact snippet
+  try {
+    const gridHtml = evalPage(`() => { const g=document.querySelector('div.grid'); return g ? g.outerHTML.slice(0,1200) : 'no-grid'; }`);
+    logInfo(`Gallery grid HTML: ${gridHtml.slice(0,800)}`);
+    const dbgInputs = listFileInputs();
+    logInfo(`Gallery inputs before batch: ${JSON.stringify(dbgInputs)}`);
+  } catch(e) { logWarn(`grid debug failed: ${e.message}`); }
   try { runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }`); await sleep(400); } catch (_) {}
   let batchSuccess = false;
   let batchRes = null;
