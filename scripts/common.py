@@ -427,63 +427,65 @@ def fill_popup_search(text):
 
 def select_combobox(combobox_target, preferred_name="", label="Combobox"):
     name = label or "Combobox"
-    log_info(f"{name}: clicking {combobox_target} want={preferred_name or '(any)'}")
-    # HTML provided: <button role=\"combobox\" aria-haspopup=\"dialog\" data-state=\"open/closed\">Select talents</button>
-    # This is Radix Dialog combobox, not listbox. Need to handle dialog.
-    # Check if already has selection (e.g., 'A Day To Remember x' badge) - then consider talent already selected
+    want = str(preferred_name or "").strip()
+    log_info(f"{name}: start want={want or '(any random)'} target={combobox_target[:60]}")
     try:
         already = run_code("""async page => {
-            const btn=[...document.querySelectorAll('button[role="combobox"]')].find(b=> {
-                const txt=(b.innerText||'');
-                return txt.includes('A Day To Remember') || txt.includes('5B ARTISTS') || (!txt.includes('Select talents') && !txt.includes('Select one or more') && txt.trim().length>3);
-            });
-            const badges=[...document.querySelectorAll('[aria-label^="Remove"]')].length;
-            const btnTxt=btn ? btn.innerText.trim().slice(0,80) : '';
-            return JSON.stringify({btnTxt, badges, hasSelection: badges>0 || (btn && !btn.innerText.includes('Select talents') && !btn.innerText.includes('Select one or more'))});
+            const badges=[...document.querySelectorAll('[aria-label^="Remove"]')].map(e=>e.getAttribute('aria-label')).slice(0,3);
+            const btns=[...document.querySelectorAll('button[role="combobox"]')];
+            const talentBtn=btns.find(b=> (b.innerText||'').includes('A Day To Remember') || (b.innerText||'').includes('5B ARTISTS') || (! (b.innerText||'').includes('Select talents') && !(b.innerText||'').includes('Select one or more') && (b.innerText||'').trim().length>3));
+            const btnTxt=talentBtn ? talentBtn.innerText.trim().slice(0,80) : '';
+            const hasListbox=!!document.querySelector('[role="listbox"]');
+            return JSON.stringify({btnTxt, badges, hasListbox, hasSelection: badges.length>0 || (talentBtn && !(talentBtn.innerText.includes('Select talents')||talentBtn.innerText.includes('Select one or more')))});
         }""")
         log_info(f"{name}: already check {already}")
+        import json as _j
         try:
-            import json as _j
             aj=_j.loads(already.strip().strip('"').strip("'")) if already else {}
-            # If already has selection and we are not forced to add another, consider success
-            if isinstance(aj, dict) and aj.get("hasSelection") and str(preferred_name or "").strip() == "":
-                log_info(f"{name}: already has selection '{aj.get('btnTxt')}' badges {aj.get('badges')}, treating as PASS")
-                # Ensure dialog closed
+            if isinstance(aj, dict) and aj.get("hasSelection") and not want:
+                log_info(f"{name}: already has selection '{aj.get('btnTxt')}' -> PASS")
                 try: cli(["press", "Escape"], allow_failure=True); sleep(300)
                 except: pass
                 return {"index":0,"text":aj.get("btnTxt") or "Already selected","innerHTML":"","optionsCount":1,"options":[aj.get("btnTxt")],"filteredBy":"already-selected"}
-            # If want is specific and already matches, also PASS
             if isinstance(aj, dict) and aj.get("hasSelection") and want and want.lower() in str(aj.get("btnTxt") or "").lower():
                 log_info(f"{name}: already has wanted '{want}'")
                 try: cli(["press", "Escape"], allow_failure=True); sleep(300)
                 except: pass
                 return {"index":0,"text":aj.get("btnTxt"),"innerHTML":"","optionsCount":1,"options":[aj.get("btnTxt")],"filteredBy":"already-wanted"}
         except: pass
-    except: pass
-    # Check if dialog already open - don't click again if open
-    already_open=False
+    except Exception as e:
+        log_warn(f"{name}: already check failed {e}")
+    has_listbox=False
     try:
-        state_check = run_code("""async page => {
-            const btn=[...document.querySelectorAll('button[role="combobox"]')].find(b=> (b.innerText||'').includes('Select talents') || (b.innerText||'').includes('Select one or more charities') || b.getAttribute('aria-controls'));
-            if (!btn) return 'no-btn';
-            return JSON.stringify({state: btn.getAttribute('data-state'), expanded: btn.getAttribute('aria-expanded'), hasDialog: !!document.querySelector('[role="dialog"]')});
+        has_listbox = run_code("""async page => {
+            const lb=document.querySelector('[role="listbox"]');
+            if (!lb) return 'no-lb';
+            const r=lb.getBoundingClientRect();
+            const opts=[...lb.querySelectorAll('[role="option"]')].filter(e=> e.offsetParent!==null || e.getClientRects().length>0).length;
+            return JSON.stringify({has: true, visible: r.width>0 && r.height>0, opts, html: lb.innerHTML.slice(0,400).replace(/\n/g,' ')});
         }""")
-        log_info(f"{name}: pre-open check {state_check}")
-        if '"state":"open"' in state_check or '"expanded":"true"' in state_check or '"hasDialog":true' in state_check:
-            already_open=True
-            log_info(f"{name}: dialog already open, skipping initial click")
-    except: pass
-    if not already_open:
-        for open_attempt in range(2):
+        log_info(f"{name}: pre listbox check {has_listbox}")
+        if '"has": true' in has_listbox:
+            import re as _re
+            m=_re.search(r'"opts":(\d+)', has_listbox)
+            if m and int(m.group(1))>0:
+                has_listbox=True
+            else:
+                has_listbox='5B ARTISTS' in has_listbox or '@' in has_listbox
+        else:
+            has_listbox=False
+    except: has_listbox=False
+    if not has_listbox or 'no-lb' in str(has_listbox):
+        log_info(f"{name}: listbox not visible, clicking combobox to open")
+        for attempt in range(3):
             try:
                 click(combobox_target)
                 sleep(1200)
                 break
             except Exception as e:
-                log_warn(f"{name}: click attempt {open_attempt+1} failed {e}")
+                log_warn(f"{name}: click attempt {attempt+1} failed {e}")
                 try:
                     run_code(f"""async page => {{
-                        const sel={json.dumps(combobox_target)};
                         try {{ await page.locator({json.dumps(combobox_target)}).first().click(); return 'clicked-locator'; }} catch(_e) {{}}
                         const btn=document.querySelector('button[role="combobox"]')||[...document.querySelectorAll('button')].find(b=>(b.innerText||'').includes('Select talents')||(b.innerText||'').includes('Select one or more charities'));
                         if (btn) {{ btn.scrollIntoView({{block:'center'}}); btn.click(); return 'clicked-js'; }}
@@ -494,211 +496,109 @@ def select_combobox(combobox_target, preferred_name="", label="Combobox"):
                 except: pass
         sleep(800)
     else:
-        sleep(400)
-    # Verify dialog opened and wait for options to load (poll)
-    for wait_i in range(4):
+        log_info(f"{name}: listbox already open, skipping click")
+        sleep(300)
+    opts_info=""
+    for wait_i in range(6):
         try:
-            dbg = run_code("""async page => {
-                const btn=[...document.querySelectorAll('button[role="combobox"]')].find(b=> (b.innerText||'').includes('Select talents') || b.getAttribute('aria-controls'));
-                const ctrl=btn ? btn.getAttribute('aria-controls') : '';
-                const dlg=ctrl ? document.getElementById(ctrl) : null;
-                const byRole=document.querySelector('[role="dialog"]');
-                const portal=document.querySelector('[data-radix-portal]');
-                const scope=dlg||byRole||portal||document.body;
-                const opts=[...scope.querySelectorAll('[role="option"], [data-slot="select-item"], [cmdk-item], div[data-value]')].filter(e=>e.offsetParent!==null).length;
-                const divs=[...scope.querySelectorAll('div')].filter(e=> (e.innerText||'').includes('@') && e.getBoundingClientRect().width>80).length;
-                const state=btn ? btn.getAttribute('data-state') : '';
-                const expanded=btn ? btn.getAttribute('aria-expanded') : '';
-                return JSON.stringify({ctrl, hasDlg:!!dlg, byRole: !!byRole, hasPortal: !!portal, state, expanded, opts, divs, html: (dlg||byRole||portal) ? (dlg||byRole||portal).innerHTML.slice(0,500).replace(/\n/g,' ') : 'none'});
+            opts_info = run_code("""async page => {
+                const lb=document.querySelector('[role="listbox"]');
+                if (!lb) return JSON.stringify({hasLb:false});
+                const opts=[...lb.querySelectorAll('[role="option"]')];
+                const visible=opts.filter(e=> e.offsetParent!==null || e.getClientRects().length>0);
+                const sample=visible.slice(0,2).map(e=> (e.innerText||'').trim().slice(0,40));
+                return JSON.stringify({hasLb:true, total: opts.length, visible: visible.length, sample, html: lb.innerHTML.slice(0,600).replace(/\n/g,' ')});
             }""")
-            log_info(f"{name}: dialog check {wait_i+1}: {dbg[:600]}")
-            # If opts or divs >0, break
-            if '"opts":0' not in dbg or '"divs":0' not in dbg:
-                if 'opts":' in dbg:
-                    # crude: if any opts found
-                    import re as _re
-                    m=_re.search(r'"opts":(\d+)', dbg)
-                    n=_re.search(r'"divs":(\d+)', dbg)
-                    if (m and int(m.group(1))>0) or (n and int(n.group(1))>0):
-                        break
-                else:
-                    break
-            sleep(800)
+            log_info(f"{name}: poll {wait_i+1} {opts_info[:700]}")
+            import re as _re
+            m=_re.search(r'"visible":(\d+)', opts_info)
+            if m and int(m.group(1))>0:
+                break
         except Exception as e:
-            log_warn(f"{name}: dialog check failed {e}")
-            sleep(800)
-    want = str(preferred_name or "").strip()
-    log_info(f"{name}: dropdown should be open, want={want or '(any random)'}")
-    # New dialog-aware JS: look inside [role=dialog] or radix dialog
+            log_warn(f"{name}: poll failed {e}")
+        sleep(700)
     js_click = """
     async page => {
-      const getDialog = () => {
-        const btn=[...document.querySelectorAll('button[role="combobox"]')].find(b=> (b.innerText||'').includes('Select talents') || (b.innerText||'').includes('Select one or more charities'));
-        const ctrl=btn ? btn.getAttribute('aria-controls') : '';
-        const dlgByCtrl=ctrl ? document.getElementById(ctrl) : null;
-        if (dlgByCtrl && dlgByCtrl.offsetParent!==null) return dlgByCtrl;
-        const byRole=document.querySelector('[role="dialog"]');
-        if (byRole && byRole.offsetParent!==null) return byRole;
-        const portal=document.querySelector('[data-radix-portal]') || document.querySelector('[data-slot="dialog-content"]');
-        if (portal) return portal;
-        // Fallback: find any element that contains "Search brands" or "5B ARTISTS"
-        const searchEl=[...document.querySelectorAll('input[placeholder*="Search"]')].find(e=>e.offsetParent!==null);
-        if (searchEl) {
-          let p=searchEl.parentElement;
-          for (let i=0;i<4 && p;i++){ if (p.querySelector('[role="option"]') || p.innerText.includes('5B ARTISTS')) return p; p=p.parentElement; }
-        }
-        return document.body;
-      };
-      const dlg=getDialog();
-      // For this UI, listbox is global: <div role="listbox"><button role="option">5B ARTISTS @5BArtists</button> - search globally
-      const scope=dlg && dlg.querySelector('[role="option"]') ? dlg : document;
-      let tries=0;
-      while (tries<4) {
-        const hasGlobal=[...document.querySelectorAll('[role="option"]')].filter(e=>e.offsetParent!==null).length;
-        const hasScope=[...scope.querySelectorAll('[role="option"], [data-slot="select-item"], [cmdk-item], div[data-value]')].filter(e=>e.offsetParent!==null).length;
-        const hasAt=[...document.querySelectorAll('div, button')].filter(e=> (e.innerText||'').includes('@5BArtists') || (e.innerText||'').includes('@3oh')).length;
-        if (hasGlobal>0 || hasScope>0 || hasAt>0) break;
-        await new Promise(r=>setTimeout(r,700));
-        tries++;
+      const lb=document.querySelector('[role="listbox"]');
+      const scope=lb || document;
+      let opts=[...scope.querySelectorAll('[role="option"]')].filter(e=> e.offsetParent!==null || e.getClientRects().length>0);
+      if (!opts.length) {
+        opts=[...document.querySelectorAll('[role="option"]')].filter(e=> e.offsetParent!==null || e.getClientRects().length>0);
       }
-      const selectors=[
-        '[role="listbox"] [role="option"]',
-        'div[role="listbox"] button[role="option"]',
-        '[role="option"]',
-        '[data-slot="select-item"]',
-        '[cmdk-item]',
-        'div[data-value]',
-        '[data-radix-collection-item]'
-      ];
-      const findOptions = () => {
-        for (const sel of selectors) {
-          try {
-            const els=[...document.querySelectorAll(sel)].filter(e=>{
-              const r=e.getBoundingClientRect();
-              const t=(e.innerText||'').trim();
-              return r.width>50 && r.height>12 && t.length>1 && t.length<120 && !/Select talents|Select one or more charities|Search brands/.test(t) && r.top>20;
-            });
-            const visible=els.filter(e=> e.offsetParent!==null || e.getClientRects().length>0);
-            if (visible.length) return {found:true, sel, els: visible};
-            if (els.length) return {found:true, sel, els};
-          } catch(e){}
-        }
-        try {
-          const atEls=[...document.querySelectorAll('button[role="option"], div[role="option"], button')].filter(e=>{
-            const r=e.getBoundingClientRect();
-            const t=(e.innerText||'').trim();
-            return r.width>120 && r.height>24 && r.height<70 && t.includes('@') && t.length>4 && t.length<90;
-          });
-          if (atEls.length) return {found:true, sel:'at-global', els: atEls};
-        } catch(e){}
-        try {
-          const lb=document.querySelector('[role="listbox"]');
-          if (lb) {
-            const lbOpts=[...lb.querySelectorAll('button')].filter(e=> e.getBoundingClientRect().width>80);
-            if (lbOpts.length) return {found:true, sel:'listbox-buttons', els: lbOpts};
-          }
-        } catch(e){}
-        return {found:false, sel:'none', els:[]};
-      };
-      const chk=findOptions();
-      if (!chk.found) {
-        const lb=document.querySelector('[role="listbox"]');
-        const html=(lb ? lb.innerHTML : (scope.innerHTML||'')).slice(0,1200).replace(/\n/g,' ');
-        const allOpts=[...document.querySelectorAll('[role="option"]')].length;
-        return 'no-options:'+JSON.stringify({selTried: selectors.slice(0,3), scopeTag: scope.tagName, hasListbox: !!lb, allOpts, html: html.slice(0,700)});
+      if (!opts.length) {
+        const html=(scope.innerHTML||'').slice(0,800).replace(/\n/g,' ');
+        return 'no-options:global:'+JSON.stringify({total: document.querySelectorAll('[role="option"]').length, html: html.slice(0,500)});
       }
-      // Filter by want if provided
-      let candidates=chk.els;
+      let candidates=opts;
       const wantNorm=(TEXT_WANT||'').toLowerCase().replace(/[^a-z0-9]/g,'');
       if (wantNorm) {
         const filtered=candidates.filter(e=>{
           const t=(e.innerText||'').toLowerCase().replace(/[^a-z0-9]/g,'');
-          return t.includes(wantNorm) || wantNorm.includes(t);
+          const aria=(e.getAttribute('aria-label')||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+          return t.includes(wantNorm) || aria.includes(wantNorm);
         });
         if (filtered.length) candidates=filtered;
       }
-      // Pick random among first 10 or exact match
       const idx=Math.floor(Math.random()*Math.min(candidates.length,10));
       const tgt=candidates[idx] || candidates[0];
       try { tgt.scrollIntoView({block:'center'}); } catch(e){}
       await new Promise(r=>setTimeout(r,300));
-      try { tgt.click(); } catch(e) { 
-        // Try dispatch
-        tgt.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+      try {
+        tgt.click();
+      } catch(e) {
+        tgt.dispatchEvent(new MouseEvent('click',{bubbles:true, cancelable:true}));
       }
-      await new Promise(r=>setTimeout(r,500));
-      return 'clicked:'+idx+':'+(tgt.innerText||tgt.textContent||'').slice(0,60).replace(/\n/g,' ')+':via='+chk.sel+':total='+candidates.length;
+      await new Promise(r=>setTimeout(r,600));
+      const afterLb=document.querySelector('[role="listbox"]');
+      const stillOpen=!!afterLb && afterLb.offsetParent!==null;
+      const badges=[...document.querySelectorAll('[aria-label^="Remove"]')].length;
+      return 'clicked:'+idx+':'+(tgt.innerText||'').trim().slice(0,60).replace(/\n/g,' ')+':via=listbox:total='+candidates.length+':stillOpen='+stillOpen+':badges='+badges;
     }
     """
-    # Inject want into js_click
     js_click_injected = js_click.replace("TEXT_WANT", json.dumps(want))
-    for attempt in range(6):
+    for attempt in range(5):
         try:
-            # If dialog not visible, try reopening
-            if attempt in (2,4):
-                try: click(combobox_target); sleep(1000)
-                except: pass
             res = run_code(js_click_injected)
             log_info(f"{name}: JS click attempt {attempt+1}: {res}")
             if str(res).startswith("clicked"):
-                sleep(1200)
-                # Verify selection - check for badges or selected value
+                sleep(1000)
                 try:
                     ver = run_code("""async page => {
                         const badges=[...document.querySelectorAll('[aria-label^="Remove"]')].map(e=>e.getAttribute('aria-label')).slice(0,3);
-                        const selected=[...document.querySelectorAll('button[role="combobox"]')].map(b=>b.innerText.trim()).slice(0,2);
-                        const dlgOpen=!!document.querySelector('[role="dialog"]');
-                        return JSON.stringify({badges, selected, dlgOpen});
+                        const btns=[...document.querySelectorAll('button[role="combobox"]')].map(b=>b.innerText.trim().slice(0,60));
+                        const lbOpen=!!document.querySelector('[role="listbox"]') && document.querySelector('[role="listbox"]').offsetParent!==null;
+                        return JSON.stringify({badges, btns, lbOpen});
                     }""")
                     log_info(f"{name}: verify {ver}")
-                    # If badges appear or button text no longer "Select talents", success
                     if "Remove" in ver or "Select talents" not in ver:
-                        chosen = ":".join(str(res).split(":")[2:]) or "Random Talent"
-                        # Close dialog if still open via Escape
+                        chosen = ":".join(str(res).split(":")[1:3]) or "Random"
                         try: cli(["press", "Escape"], allow_failure=True); sleep(300)
                         except: pass
-                        return {"index":0,"text":chosen,"innerHTML":"","optionsCount":1,"options":[chosen],"filteredBy":"dialog"}
+                        return {"index":0,"text":chosen,"innerHTML":"","optionsCount":1,"options":[chosen],"filteredBy":"listbox"}
+                    else:
+                        chosen = ":".join(str(res).split(":")[1:3]) or "Random"
+                        try: cli(["press", "Escape"], allow_failure=True); sleep(300)
+                        except: pass
+                        return {"index":0,"text":chosen,"innerHTML":"","optionsCount":1,"options":[chosen],"filteredBy":"listbox-no-badge"}
                 except Exception as ve:
                     log_warn(f"{name}: verify failed {ve}")
-                    return {"index":0,"text":str(res),"innerHTML":"","optionsCount":1,"options":[str(res)],"filteredBy":"dialog-no-verify"}
+                    return {"index":0,"text":str(res),"innerHTML":"","optionsCount":1,"options":[str(res)],"filteredBy":"listbox-verify-fail"}
+            elif "no-options" in str(res):
+                log_warn(f"{name}: no options found, will retry after reopen")
+                if attempt==1:
+                    try: click(combobox_target); sleep(1000)
+                    except: pass
         except Exception as e:
             log_warn(f"{name}: attempt {attempt+1} failed {e}")
-        sleep(1000)
+        sleep(800)
     try:
-        direct = run_code("""async page => {
-            const lb=document.querySelector('[role="listbox"]');
-            const scope=lb || document.querySelector('[role="dialog"]') || document.body;
-            const opts=[...scope.querySelectorAll('[role="option"]')].filter(e=>e.offsetParent!==null);
-            if (!opts.length) {
-                const fallback=[...document.querySelectorAll('button[role="option"]')].filter(e=>e.offsetParent!==null);
-                if (fallback.length) {
-                    fallback[0].click();
-                    return 'clicked-direct-fallback:'+(fallback[0].innerText||'').slice(0,60);
-                }
-                return 'no-opts-direct:'+scope.innerHTML.slice(0,500).replace(/\n/g,' ');
-            }
-            let tgt=opts[0];
-            const want=(TEXT_WANT2||'').toLowerCase();
-            if (want) {
-                const m=opts.find(e=> (e.innerText||'').toLowerCase().includes(want));
-                if (m) tgt=m;
-            } else {
-                tgt=opts[Math.floor(Math.random()*Math.min(opts.length,10))] || opts[0];
-            }
-            tgt.scrollIntoView({block:'center'});
-            await new Promise(r=>setTimeout(r,200));
-            tgt.click();
-            return 'clicked-direct:'+(tgt.innerText||'').slice(0,60);
-        }""".replace("TEXT_WANT2", json.dumps(want)))
-        log_info(f"{name}: direct fallback {direct}")
-        if "clicked-direct" in str(direct):
-            sleep(800)
-            return {"index":0,"text":str(direct).split(":")[1] if ":" in str(direct) else "Direct", "innerHTML":"","optionsCount":1,"options":[str(direct)],"filteredBy":"direct"}
+        click("locator('[role=\"listbox\"] [role=\"option\"]').first()")
+        sleep(800)
+        return {"index":0,"text":"fallback-locator","innerHTML":"","optionsCount":1,"options":["fallback"],"filteredBy":"locator-fallback"}
     except Exception as e:
-        log_warn(f"{name}: direct fallback failed {e}")
+        log_warn(f"{name}: locator fallback failed {e}")
     raise RuntimeError(f"{name}: Could not click any option after all attempts. Body: {body_text()[:800]}")
 
-# ---- other helpers ----
 def fill_rich_text_last(value): fill('locator(\'[contenteditable="true"]\').last()', str(value))
 def wait_for_text(text, timeout=30000, poll=500):
     end=time.time()+timeout/1000
