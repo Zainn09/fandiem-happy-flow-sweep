@@ -16,13 +16,13 @@
     "./assets/qa-cover.png"
   ],
   "galleryMedia": [
-    "./assets/qa-gallery-1.png",
-    "./assets/qa-gallery-2.png"
+    "./assets/bigfolio-teamwork.jpg",
+    "./assets/nectar-610.webp",
+    "./assets/fandiem-610.webp"
   ],
   "typeCoverageMedia": [
     "./assets/qa-gallery-3.png",
-    "./assets/qa-sample.jpg",
-    "./assets/qa-sample.webp"
+    "./assets/qa-sample.jpg"
   ],
   "bonusImage": "./assets/qa-bonus.png",
   "customTierEntries": "500",
