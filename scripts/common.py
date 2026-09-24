@@ -427,68 +427,179 @@ def fill_popup_search(text):
 
 def select_combobox(combobox_target, preferred_name="", label="Combobox"):
     name = label or "Combobox"
-    log_info(f"{name}: clicking {combobox_target}")
-    click(combobox_target)
-    sleep(1500)
+    log_info(f"{name}: clicking {combobox_target} want={preferred_name or '(any)'}")
+    # HTML provided: <button role=\"combobox\" aria-haspopup=\"dialog\" data-state=\"open/closed\">Select talents</button>
+    # This is Radix Dialog combobox, not listbox. Need to handle dialog.
+    for open_attempt in range(2):
+        try:
+            click(combobox_target)
+            sleep(1200)
+            break
+        except Exception as e:
+            log_warn(f"{name}: click attempt {open_attempt+1} failed {e}")
+            try:
+                run_code(f"""async page => {{
+                    const sel={json.dumps(combobox_target)};
+                    try {{ await page.locator({json.dumps(combobox_target)}).first().click(); return 'clicked-locator'; }} catch(_e) {{}}
+                    const btn=document.querySelector('button[role="combobox"]')||[...document.querySelectorAll('button')].find(b=>(b.innerText||'').includes('Select talents')||(b.innerText||'').includes('Select one or more charities'));
+                    if (btn) {{ btn.scrollIntoView({{block:'center'}}); btn.click(); return 'clicked-js'; }}
+                    return 'no-btn';
+                }}""")
+                sleep(1000)
+                break
+            except: pass
+    sleep(800)
+    # Verify dialog opened
     try:
-        run_code("""async page => {
-      const b=document.querySelector('button[role="combobox"]')||[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Select talents')||(x.innerText||'').includes('Select one or more charities'));
-      if(b){b.click();return 'clicked';} return 'no-btn';
-    }""")
-        sleep(1000)
-    except: pass
+        dbg = run_code("""async page => {
+            const btn=[...document.querySelectorAll('button[role="combobox"]')].find(b=> (b.innerText||'').includes('Select talents') || b.getAttribute('aria-controls'));
+            const ctrl=btn ? btn.getAttribute('aria-controls') : '';
+            const dlg=ctrl ? document.getElementById(ctrl) : null;
+            const byRole=document.querySelector('[role="dialog"]');
+            const state=btn ? btn.getAttribute('data-state') : '';
+            const expanded=btn ? btn.getAttribute('aria-expanded') : '';
+            return JSON.stringify({ctrl, hasDlg:!!dlg, dlgId: dlg?dlg.id:'', byRole: !!byRole, state, expanded, dlgHtml: (dlg||byRole) ? (dlg||byRole).innerHTML.slice(0,600) : 'none'});
+        }""")
+        log_info(f"{name}: dialog check {dbg[:600]}")
+    except Exception as e:
+        log_warn(f"{name}: dialog check failed {e}")
     want = str(preferred_name or "").strip()
     log_info(f"{name}: dropdown should be open, want={want or '(any random)'}")
+    # New dialog-aware JS: look inside [role=dialog] or radix dialog
     js_click = """
     async page => {
-      const find=()=>{
-        for(const sel of ['[role="option"]','[data-slot="select-item"]','div[data-value]','[data-radix-collection-item]','li[role="option"]','div[role="option"]']){
-          try{ const els=[...document.querySelectorAll(sel)].filter(e=>{const t=(e.innerText||'').trim(); return t.length>3&&t.length<100&&(t.includes('@')||t.includes('ARTISTS')||t.includes('3OH')||/^[A-Z0-9 ]+$/.test(t.slice(0,20)));}); if(els.length) return {found:true,sel,count:els.length}; }catch(e){}
-        }
-        try{ const at=[...document.querySelectorAll('div')].filter(d=>{const t=(d.innerText||'').trim();const r=d.getBoundingClientRect();return t.includes('@')&&t.length<80&&r.width>100&&r.height>10&&r.top>100;}).slice(0,10); if(at.length) return {found:true,sel:'div-with-@',count:at.length}; }catch(e){}
-        return {found:false,count:0};
+      const getDialog = () => {
+        // Try Radix dialog via aria-controls
+        const btn=[...document.querySelectorAll('button[role="combobox"]')].find(b=> (b.innerText||'').includes('Select talents') || (b.innerText||'').includes('Select one or more charities'));
+        const ctrl=btn ? btn.getAttribute('aria-controls') : '';
+        const dlgByCtrl=ctrl ? document.getElementById(ctrl) : null;
+        if (dlgByCtrl && dlgByCtrl.offsetParent!==null) return dlgByCtrl;
+        const byRole=document.querySelector('[role="dialog"]');
+        if (byRole && byRole.offsetParent!==null) return byRole;
+        // Radix portal
+        const portal=document.querySelector('[data-radix-portal]') || document.querySelector('[data-slot="dialog-content"]');
+        if (portal) return portal;
+        return document.body;
       };
-      const chk=find(); if(!chk.found) return 'no-options:'+JSON.stringify(chk).slice(0,300);
-      try{
-        for(const sel of ['[role="option"]','[data-slot="select-item"]','div[data-value]']){
-          const els=[...document.querySelectorAll(sel)]; if(els.length){ const idx=Math.floor(Math.random()*Math.min(els.length,10)); const tgt=els[idx]||els[0]; tgt.scrollIntoView({block:'center'}); await new Promise(r=>setTimeout(r,200)); tgt.click(); return 'clicked:'+idx+':'+(tgt.innerText||'').slice(0,60)+':via='+sel; }
+      const dlg=getDialog();
+      const scope=dlg || document;
+      const selectors=[
+        '[role="option"]',
+        '[data-slot="select-item"]',
+        '[cmdk-item]',
+        'div[data-value]',
+        '[data-radix-collection-item]',
+        '[data-slot="dialog-content"] [role="option"]',
+        '[role="dialog"] div[data-value]',
+        'div[role="listbox"] [role="option"]'
+      ];
+      const findOptions = () => {
+        for (const sel of selectors) {
+          try {
+            const els=[...scope.querySelectorAll(sel)].filter(e=>{
+              const r=e.getBoundingClientRect();
+              const t=(e.innerText||'').trim();
+              return r.width>50 && r.height>10 && t.length>1 && t.length<120 && !/Select talents|Select one or more charities/.test(t);
+            });
+            if (els.length) return {found:true, sel, els};
+          } catch(e){}
         }
-        const at=[...document.querySelectorAll('div')].filter(d=>{const t=(d.innerText||'').trim();const r=d.getBoundingClientRect();return t.includes('@')&&t.length<80&&r.width>100;}); if(at.length){ const idx=Math.floor(Math.random()*Math.min(at.length,10)); const tgt=at[idx]||at[0]; tgt.click(); return 'clicked-at:'+idx+':'+(tgt.innerText||'').slice(0,50); }
-        return 'no-click-target';
-      }catch(e){ return 'error:'+e.message; }
+        // Fallback: any div in dialog with text that looks like talent name (capital letters, or contains space)
+        try {
+          const all=[...scope.querySelectorAll('div, button, span')].filter(e=>{
+            const r=e.getBoundingClientRect();
+            const t=(e.innerText||'').trim();
+            // Must be clickable and not the trigger button itself
+            return r.width>100 && r.height>20 && r.top>50 && t.length>2 && t.length<80 && !t.includes('Select talents') && !t.includes('Select one or more') && (e.getAttribute('role')==='option' || e.hasAttribute('data-value') || /[A-Z][a-z]+ [A-Z]/.test(t) || t.includes('ARTISTS') || /^[A-Z0-9 ]{3,}$/.test(t));
+          });
+          // Deduplicate by text
+          const uniq=[];
+          const seen=new Set();
+          for (const el of all) { const tx=(el.innerText||'').trim(); if (!seen.has(tx) && tx) { seen.add(tx); uniq.push(el); } if (uniq.length>=15) break; }
+          if (uniq.length) return {found:true, sel:'fallback-div', els: uniq};
+        } catch(e){}
+        return {found:false, sel:'none', els:[]};
+      };
+      const chk=findOptions();
+      if (!chk.found) {
+        // Debug dump
+        const html=(scope.innerHTML||'').slice(0,1000).replace(/\n/g,' ');
+        return 'no-options:'+JSON.stringify({selTried: selectors.slice(0,3), html: html.slice(0,600)});
+      }
+      // Filter by want if provided
+      let candidates=chk.els;
+      const wantNorm=(TEXT_WANT||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+      if (wantNorm) {
+        const filtered=candidates.filter(e=>{
+          const t=(e.innerText||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+          return t.includes(wantNorm) || wantNorm.includes(t);
+        });
+        if (filtered.length) candidates=filtered;
+      }
+      // Pick random among first 10 or exact match
+      const idx=Math.floor(Math.random()*Math.min(candidates.length,10));
+      const tgt=candidates[idx] || candidates[0];
+      try { tgt.scrollIntoView({block:'center'}); } catch(e){}
+      await new Promise(r=>setTimeout(r,300));
+      try { tgt.click(); } catch(e) { 
+        // Try dispatch
+        tgt.dispatchEvent(new MouseEvent('click',{bubbles:true}));
+      }
+      await new Promise(r=>setTimeout(r,500));
+      return 'clicked:'+idx+':'+(tgt.innerText||tgt.textContent||'').slice(0,60).replace(/\n/g,' ')+':via='+chk.sel+':total='+candidates.length;
     }
     """
-    for attempt in range(5):
+    # Inject want into js_click
+    js_click_injected = js_click.replace("TEXT_WANT", json.dumps(want))
+    for attempt in range(6):
         try:
-            res = run_code(js_click)
+            # If dialog not visible, try reopening
+            if attempt in (2,4):
+                try: click(combobox_target); sleep(1000)
+                except: pass
+            res = run_code(js_click_injected)
             log_info(f"{name}: JS click attempt {attempt+1}: {res}")
             if str(res).startswith("clicked"):
                 sleep(1200)
+                # Verify selection - check for badges or selected value
                 try:
-                    ver = eval_page("""() => JSON.stringify({badges:[...document.querySelectorAll('[aria-label^="Remove"]')].map(e=>e.getAttribute('aria-label')).slice(0,2),hasSelect:!![...document.querySelectorAll('button')].find(b=>(b.innerText||'').includes('Select talents'))})""")
+                    ver = run_code("""async page => {
+                        const badges=[...document.querySelectorAll('[aria-label^="Remove"]')].map(e=>e.getAttribute('aria-label')).slice(0,3);
+                        const selected=[...document.querySelectorAll('button[role="combobox"]')].map(b=>b.innerText.trim()).slice(0,2);
+                        const dlgOpen=!!document.querySelector('[role="dialog"]');
+                        return JSON.stringify({badges, selected, dlgOpen});
+                    }""")
                     log_info(f"{name}: verify {ver}")
-                    if "Remove" in ver: pass
-                except: pass
-                chosen = ":".join(str(res).split(":")[2:]) or "Random Talent"
-                return {"index":0,"text":chosen,"innerHTML":"","optionsCount":1,"options":[chosen],"filteredBy":"js-any"}
+                    # If badges appear or button text no longer "Select talents", success
+                    if "Remove" in ver or "Select talents" not in ver:
+                        chosen = ":".join(str(res).split(":")[2:]) or "Random Talent"
+                        # Close dialog if still open via Escape
+                        try: cli(["press", "Escape"], allow_failure=True); sleep(300)
+                        except: pass
+                        return {"index":0,"text":chosen,"innerHTML":"","optionsCount":1,"options":[chosen],"filteredBy":"dialog"}
+                except Exception as ve:
+                    log_warn(f"{name}: verify failed {ve}")
+                    return {"index":0,"text":str(res),"innerHTML":"","optionsCount":1,"options":[str(res)],"filteredBy":"dialog-no-verify"}
         except Exception as e:
             log_warn(f"{name}: attempt {attempt+1} failed {e}")
         sleep(1000)
-        if attempt==2:
-            try: click(combobox_target); sleep(1000)
-            except: pass
+    # Fallback: try list_combobox_options with dialog scope
     try:
-        opts = list_combobox_options()
-        if opts:
-            import random
-            idx = random.randint(0, min(len(opts),10)-1)
-            chosen = opts[idx]
-            log_info(f"{name}: fallback clicking [{idx}]: {chosen['text']}")
-            run_code(f"async page => {{ const els=[...document.querySelectorAll('[role=\"option\"], [data-slot=\"select-item\"]')]; if(els[{idx}]) els[{idx}].click(); return 'ok'; }}")
+        # Try via run_code to click first option in dialog directly
+        direct = run_code("""async page => {
+            const dlg=document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]') || document.body;
+            const opts=[...dlg.querySelectorAll('[role="option"], [data-slot="select-item"], div[data-value], [cmdk-item]')].filter(e=>e.offsetParent!==null);
+            if (!opts.length) return 'no-opts-direct:'+dlg.innerHTML.slice(0,500).replace(/\n/g,' ');
+            const first=opts[0];
+            first.click();
+            return 'clicked-direct:'+(first.innerText||'').slice(0,60);
+        }""")
+        log_info(f"{name}: direct fallback {direct}")
+        if "clicked-direct" in str(direct):
             sleep(800)
-            return {"index":idx,"text":chosen["text"],"innerHTML":chosen.get("html",""),"optionsCount":len(opts),"options":[o["text"] for o in opts],"filteredBy":"fallback"}
+            return {"index":0,"text":str(direct).split(":")[1] if ":" in str(direct) else "Direct", "innerHTML":"","optionsCount":1,"options":[str(direct)],"filteredBy":"direct"}
     except Exception as e:
-        log_warn(f"{name}: fallback failed {e}")
+        log_warn(f"{name}: direct fallback failed {e}")
     raise RuntimeError(f"{name}: Could not click any option after all attempts. Body: {body_text()[:800]}")
 
 # ---- other helpers ----
