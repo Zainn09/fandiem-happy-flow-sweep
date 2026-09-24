@@ -447,6 +447,11 @@ def open_sweep_create():
     heading("Campaign Info")
 
 def fill_campaign_info(report):
+    # Dismiss Playwright banner modal that blocks browser_evaluate (seen as 'Tool browser_evaluate does not handle modal state')
+    try:
+        cli(["press", "Escape"], allow_failure=True)
+        sleep(300)
+    except: pass
     fill_first_available(['locator(\'input[name="campaignInfo.title"]\')', locator("placeholder","e.g. Eras Tour Backstage Meet & Greet Experience")], sweep_title, "campaign title")
     assert_contains(body_text(), sweep_title[:20], "Title echo")
     # wait inputs
