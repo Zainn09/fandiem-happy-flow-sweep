@@ -79,13 +79,60 @@ def fill(target, value): cli(["fill", target, str(value)])
 def press(key): cli(["press", key])
 def goto(url): cli(["goto", url])
 def screenshot(filename): cli(["screenshot", f"--filename={filename}"], allow_failure=True)
-def eval_page(expr): return cli(["eval", expr], raw=True)["stdout"].strip()
+def eval_page(expr):
+    for attempt in range(2):
+        try:
+            return cli(["eval", expr], raw=True)["stdout"].strip()
+        except Exception as e:
+            if "modal" in str(e).lower() and attempt == 0:
+                log_warn(f"eval modal blocked, dismissing then retry: {str(e)[:150]}")
+                try:
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(400)
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(300)
+                except: pass
+                continue
+            raise
+    return 
 def run_code(code): return cli(["run-code", code], raw=True)["stdout"].strip()
 def tab_new(url=None): return cli(["tab-new", url] if url else ["tab-new"])["stdout"]
 def tab_list(): return cli(["tab-list"])["stdout"]
 
-def body_text(): return eval_page('() => (document.body ? document.body.innerText : "")')
-def current_url(): return eval_page('() => location.href')
+def body_text():
+    for attempt in range(2):
+        try:
+            return eval_page('() => (document.body ? document.body.innerText : "")')
+        except Exception as e:
+            if "modal" in str(e).lower() and attempt == 0:
+                try:
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(300)
+                except: pass
+                continue
+            try:
+                raw2 = run_code("async page => { return await page.evaluate(() => (document.body ? document.body.innerText : '')); }")
+                return str(raw2 or "").strip().strip('"').strip("'")
+            except:
+                return ""
+    return ""
+
+def current_url():
+    try:
+        return eval_page('() => location.href')
+    except Exception as e:
+        if "modal" in str(e).lower():
+            try:
+                cli(["press", "Escape"], allow_failure=True)
+                sleep(300)
+                return eval_page('() => location.href')
+            except:
+                pass
+        try:
+            raw2 = run_code("async page => { return await page.evaluate(() => location.href); }")
+            return str(raw2 or "").strip().strip('"').strip("'")
+        except:
+            return 
 
 def assert_contains(text, value, label):
     if str(value).lower() not in str(text).lower():
@@ -269,10 +316,52 @@ def safe_join(arr, sep=" | "):
     except: return ""
 
 def gallery_items_text():
-    return eval_page("""() => { const m=(document.body.innerText||'').match(/(\\d+)\\s+items?/i); return m?m[0]:''; }""")
+    # Handle modal state: browser_evaluate fails when Playwright banner modal is open (top Cancel banner)
+    for attempt in range(2):
+        try:
+            return eval_page("""() => { const m=(document.body.innerText||'').match(/(\\d+)\\s+items?/i); return m?m[0]:''; }""")
+        except Exception as e:
+            if "modal" in str(e).lower() and attempt == 0:
+                log_warn(f"gallery_items_text modal blocked, dismissing: {str(e)[:200]}")
+                try:
+                    # Dismiss Playwright banner Cancel or any modal via Escape
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(500)
+                    # Also try clicking Cancel on the banner
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(500)
+                except: pass
+                continue
+            # Fallback: try via run_code which may handle modal differently
+            try:
+                raw2 = run_code("""async page => { return await page.evaluate(() => { const m=(document.body.innerText||'').match(/(\\d+)\\s+items?/i); return m?m[0]:''; }); }""")
+                return str(raw2 or "").strip().strip('"').strip("'")
+            except:
+                return ""
+    return ""
+
 def gallery_tile_count():
-    raw = eval_page("""() => String(document.querySelectorAll('img[src*="blob:"], img[src*="cloudinary"], img[src*="amazonaws"], video').length)""")
-    return int(re.sub(r"[^0-9]", "", raw) or 0) if raw else 0
+    for attempt in range(2):
+        try:
+            raw = eval_page("""() => String(document.querySelectorAll('img[src*="blob:"], img[src*="cloudinary"], img[src*="amazonaws"], video').length)""")
+            return int(re.sub(r"[^0-9]", "", str(raw)) or 0) if raw else 0
+        except Exception as e:
+            if "modal" in str(e).lower() and attempt == 0:
+                log_warn(f"gallery_tile_count modal blocked, dismissing: {str(e)[:200]}")
+                try:
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(500)
+                    cli(["press", "Escape"], allow_failure=True)
+                    sleep(500)
+                except: pass
+                continue
+            try:
+                raw2 = run_code("""async page => { return String(await page.evaluate(() => document.querySelectorAll('img[src*="blob:"], img[src*="cloudinary"], img[src*="amazonaws"], video').length)); }""")
+                clean = re.sub(r'[^0-9]', '', str(raw2) or '')
+                return int(clean or 0)
+            except:
+                return 0
+    return 0
 
 OPTION_SELECTOR = '[role="option"], [role="menuitemcheckbox"], [role="menuitem"][data-value], [data-slot="select-item"], [data-radix-collection-item]'
 
