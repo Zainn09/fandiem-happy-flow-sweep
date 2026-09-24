@@ -20,9 +20,11 @@ resultsDir = ROOT / "results"
 resultsDir.mkdir(parents=True, exist_ok=True)
 
 def get_cli_runner():
+    import shutil
+    node = shutil.which("node") or "node"
     cli_js = ROOT / "node_modules" / "@playwright" / "cli" / "playwright-cli.js"
     if cli_js.exists():
-        return {"command": sys.executable, "prefix": [str(cli_js)], "shell": False}
+        return {"command": node, "prefix": [str(cli_js)], "shell": False}
     local_name = "playwright-cli.cmd" if os.name == "nt" else "playwright-cli"
     local = ROOT / "node_modules" / ".bin" / local_name
     command = str(local) if local.exists() else local_name

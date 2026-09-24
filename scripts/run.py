@@ -49,8 +49,10 @@ def ensure_playwright_attached():
         else:
             log_info("Launching attach with extension token...")
         try:
-            subprocess.Popen([sys.executable, attach_script], cwd=str(ROOT), env=os.environ.copy())
-            log_info(f"Spawned {attach_script}")
+            import shutil
+            node = shutil.which("node") or "node"
+            subprocess.Popen([node, attach_script], cwd=str(ROOT), env=os.environ.copy())
+            log_info(f"Spawned {attach_script} via {node}")
         except Exception as e:
             log_warn(f"Failed to spawn attach.js: {e}")
     launch("Initial attach - opening Allow & Select tab...")
