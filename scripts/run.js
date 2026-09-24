@@ -302,10 +302,12 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
   // Add gallery-specific precise targets
   if (label && label.includes('Gallery')) {
     dropTargets.push(
+      `locator('div.space-y-2').first()`,
+      `locator('div.space-y-2 button:has-text("Add media")').first()`,
       `locator('button[type="button"]:has-text("Add media")').first()`,
       `locator('button:has-text("Add media")').first()`,
-      `locator('div.space-y-1').nth(1)`,
-      `locator('div[class*="border-dashed"]').first()`
+      `locator('div.space-y-2:has(button:has-text("Add media"))').first()`,
+      `locator('div.grid:has(button:has-text("Add media"))').first()`
     );
   } else if (label === 'Cover') {
     dropTargets.push(
@@ -422,7 +424,11 @@ async function attemptUpload({ dropTarget, clickTarget, inputNth, absPaths, labe
     // Cover has single input without multiple, Gallery has input[multiple]
     // Prioritize [multiple] for Gallery, non-multiple for Cover
     if (label && label.includes('Gallery')) {
+      // Priority: space-y-2 is the Media Gallery container per user request (one-by-one upload here)
       inputSelectors.push(
+        `div.space-y-2 input[type="file"][multiple]`,
+        `div.space-y-2 input[multiple]`,
+        `div.space-y-2 > input[type="file"]`,
         `button:has-text("Add media") + input[type="file"]`,
         `div.grid > input[type="file"][multiple]`,
         `div.grid input[type="file"][multiple]`,
@@ -763,6 +769,15 @@ async function openSweepCreate() {
 
 // ------------------------------------------- screen 1: campaign info -----
 async function fillCampaignInfo(report) {
+  // Dismiss Playwright banner modal that blocks browser_evaluate (seen as Tool browser_evaluate does not handle modal state)
+  for (let _dismissTry=0; _dismissTry<2; _dismissTry++) {
+    try {
+      cli(["press", "Escape"], true); await sleep(400);
+      cli(["press", "Escape"], true); await sleep(300);
+      try { runCode(`async page => { const btn=[...document.querySelectorAll('button')].find(b=>/Cancel/.test(b.innerText||'')); if(btn){ btn.click(); return 'clicked-cancel'; } return 'no-cancel'; }`); } catch(_){}
+      await sleep(300);
+    } catch(_){}
+  }
   // Title (required): name="campaignInfo.title"
   fillFirstAvailable(
     [`locator('input[name="campaignInfo.title"]')`, locator('placeholder', 'e.g. Eras Tour Backstage Meet & Greet Experience')],
@@ -859,31 +874,31 @@ async function fillCampaignInfo(report) {
   const galleryOrder = [];
   const strategies = [];
 
-  // Cover (optional): precise per actual HTML - div.group inside space-y-1, input without multiple
-  // HTML: <div class="space-y-1"><div class="group relative ... aspect-[820/312]"><input type=file><div>Drag & drop...
-  try {
-    const beforeTiles = galleryTileCount();
-    // Try precise cover input first: input not multiple
-    logInfo('Cover: HTML shows input without multiple inside div.group, trying precise setInputFiles first');
-    revealFileInputs();
-    await sleep(500);
-    let coverInputs = listFileInputs();
-    logInfo(`Cover: found ${coverInputs.length} inputs: ${JSON.stringify(coverInputs.map(i => ({ idx: i.index, accept: (i.accept || '').slice(0, 30), multiple: i.multiple })))}`);
-    const res = await attemptUpload({
-      dropTarget: `locator('div.group:has(input[type="file"])').first()`,
-      clickTarget: `locator('div.group:has-text("Drag & drop or click to upload")').first()`,
-      inputNth: 0,
-      absPaths: coverMedia,
-      label: 'Cover'
-    });
-    strategies.push({ slot: 'cover', ...res, files: (res.files || []).map(f => path.basename(f)) });
-    report.media.cover = { files: (coverMedia || []).map(f => path.basename(f)), strategy: res.strategy };
-    logInfo(`cover tiles ${beforeTiles} -> ${res.tiles}`);
-  } catch (e) {
-    // Cover is optional per workflow — record but don't fail.
-    logWarn(`cover upload failed (optional, continuing): ${String(e.message).split('\n')[0]}`);
-    report.media.cover = { files: coverMedia.map(f => path.basename(f)), error: String(e.message).split('\n')[0] };
-  }
+  // Cover - SKIPPED per user request: not required, focus on space-y-2 Media Gallery one-by-one
+  // Previous Cover code commented out:
+  // try {
+  //   const beforeTiles = galleryTileCount();
+  //   logInfo('Cover: HTML shows input without multiple inside div.group, trying precise setInputFiles first');
+  //   revealFileInputs();
+  //   await sleep(500);
+  //   let coverInputs = listFileInputs();
+  //   logInfo(`Cover: found ${coverInputs.length} inputs: ${JSON.stringify(coverInputs.map(i => ({ idx: i.index, accept: (i.accept || '').slice(0, 30), multiple: i.multiple })))}`);
+  //   const res = await attemptUpload({
+  //     dropTarget: `locator('div.group:has(input[type="file"])').first()`,
+  //     clickTarget: `locator('div.group:has-text("Drag & drop or click to upload")').first()`,
+  //     inputNth: 0,
+  //     absPaths: coverMedia,
+  //     label: 'Cover'
+  //   });
+  //   strategies.push({ slot: 'cover', ...res, files: (res.files || []).map(f => path.basename(f)) });
+  //   report.media.cover = { files: (coverMedia || []).map(f => path.basename(f)), strategy: res.strategy };
+  //   logInfo(`cover tiles ${beforeTiles} -> ${res.tiles}`);
+  // } catch (e) {
+  //   logWarn(`cover upload failed (optional, continuing): ${String(e.message).split('\n')[0]}`);
+  //   report.media.cover = { files: coverMedia.map(f => path.basename(f)), error: String(e.message).split('\n')[0] };
+  // }
+  logInfo('Cover upload SKIPPED - not required, focusing on space-y-2 Media Gallery');
+  report.media.cover = { files: coverMedia.map(f => path.basename(f)), skipped: true, reason: 'user requested space-y-2 gallery only' };
 
   // Ensure gallery section is visible before uploads - scroll down
   try {
@@ -918,41 +933,30 @@ async function fillCampaignInfo(report) {
     logWarn(`Gallery scroll failed: ${e.message}`);
   }
 
-  // Gallery: same as Cover - upload 3-5 images via the multiple input inside div.grid, preserve order for storefront
-  // Your HTML: <div class="grid"><button>Add media</button><input multiple>  Cover was 1 image via div.group, Gallery is 3-5 via this input
+  // Media Gallery: ONE-BY-ONE in div.space-y-2 per user request (Cover skipped)
+  // HTML: div.space-y-2 contains Media Gallery heading + div.grid > button Add media + input[multiple]
+  // Requirement: preserve order exactly as galleryMedia (bigfolio-teamwork.jpg -> nectar-610.webp -> fandiem-610.webp)
   const galleryTargets = {
-    drop: `locator('button[type="button"]:has-text("Add media")')`,
-    click: `locator('button[type="button"]:has-text("Add media")')`
+    drop: `locator('div.space-y-2').first()`,
+    click: `locator('div.space-y-2 button:has-text("Add media")').first()`
   };
-  // Batch of 3-5: galleryMedia (2) + typeCoverage (3) = 5
-  const galleryBatch = [...galleryMedia, ...typeCoverageMedia].slice(0, 5);
-  while (galleryBatch.length < 3) galleryBatch.push(galleryMedia[0]);
-  logInfo(`Gallery batch upload: ${galleryBatch.length} images in order: ${galleryBatch.map(f=>path.basename(f)).join(', ')}`);
-  // Debug: dump grid HTML for your exact snippet
+  // Use exactly galleryMedia (3 CDN images in order) - no batch, one-by-one into space-y-2
+  const galleryBatch = [...galleryMedia]; // keep user-provided order, 3 images
+  // Ensure gallery container visible before any upload - target space-y-2
   try {
-    const gridHtml = evalPage(`() => { const g=document.querySelector('div.grid'); return g ? g.outerHTML.slice(0,1200) : 'no-grid'; }`);
-    logInfo(`Gallery grid HTML: ${gridHtml.slice(0,800)}`);
-    const dbgInputs = listFileInputs();
-    logInfo(`Gallery inputs before batch: ${JSON.stringify(dbgInputs)}`);
-  } catch(e) { logWarn(`grid debug failed: ${e.message}`); }
-  try { runCode(`async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }`); await sleep(400); } catch (_) {}
-  let batchSuccess = false;
+    runCode(`async page => { const g=document.querySelector('div.space-y-2'); if(g) g.scrollIntoView({behavior:'instant',block:'center'}); else { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); } return 'scrolled-space-y-2'; }`);
+    await sleep(600);
+    revealFileInputs(); await sleep(400);
+    const debugSpace = runCode(`async page => { const g=document.querySelector('div.space-y-2'); return g ? g.outerHTML.slice(0,1000) : 'no-space-y-2'; }`);
+    logInfo(`space-y-2 HTML before upload: ${String(debugSpace).slice(0,600)}`);
+  } catch(e) { logWarn(`space-y-2 scroll/debug failed: ${e.message}`); }
+  logInfo(`Gallery one-by-one upload into space-y-2: ${galleryBatch.length} images in order: ${galleryBatch.map(f=>path.basename(f)).join(', ')}`);
+  // One-by-one upload loop - preserves order for storefront verification
+  let batchSuccess = false; // not used for batch, keeps coverage logic simple
   let batchRes = null;
+  // Directly go one-by-one into space-y-2 (no batch)
   try {
-    let inputsNow = listFileInputs();
-    const prefIdx = inputsNow.length > 1 ? 1 : 0;
-    batchRes = await attemptUpload({
-      dropTarget: galleryTargets.drop,
-      clickTarget: galleryTargets.click,
-      inputNth: prefIdx,
-      absPaths: galleryBatch,
-      label: `Gallery[batch ${galleryBatch.length} images]`
-    });
-    batchSuccess = true;
-    for (const f of galleryBatch) galleryOrder.push(path.basename(f));
-    strategies.push({ slot: 'gallery', file: 'batch', ...batchRes, files: (batchRes.files || galleryBatch).map(f => path.basename(f)) });
-    await sleep(1200);
-    logInfo(`Gallery batch success: tiles=${galleryTileCount()} items=${galleryItemsText()} order=${galleryOrder.join(', ')}`);
+    throw new Error('skip-batch-go-one-by-one');
   } catch (e) {
     logWarn(`Gallery batch failed, fallback one-by-one: ${String(e.message).split('\n')[0]}`);
     for (const file of galleryMedia) {

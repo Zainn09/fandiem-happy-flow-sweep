@@ -169,8 +169,9 @@ def build_sweep_title():
 
 # ---- uploads ----
 def list_file_inputs():
-    try:
-        raw = eval_page("""() => {
+    for _attempt in range(2):
+        try:
+            raw = eval_page("""() => {
       const found=[]; const seen=new Set();
       function collect(root){
         try{
@@ -190,43 +191,46 @@ def list_file_inputs():
       try{ for(const iframe of [...document.querySelectorAll('iframe')]){ try{ const d=iframe.contentDocument||iframe.contentWindow.document; if(d) collect(d);}catch(_){} } }catch(_){}
       return JSON.stringify(found.map((f,i)=>({index:i,...f})));
     }""")
-        # Use cleaned raw for check too
-        raw_for_check = str(raw or "").strip().strip('"').strip("'").strip()
-        if not raw_for_check or raw_for_check == "[]":
-            try:
-                cnt = int(run_code("async page => String(await page.locator('input[type=\"file\"]').count())").strip() or "0")
-                if cnt>0:
-                    log_info(f"list_file_inputs eval 0 but locator count={cnt}, creating dummy entries")
-                    return [{"index":i,"accept":"","name":"","id":"","multiple":False,"visible":False,"selector":"locator-count"} for i in range(cnt)]
+            # Use cleaned raw for check too
+            raw_for_check = str(raw or "").strip().strip('"').strip("'").strip()
+            if not raw_for_check or raw_for_check == "[]":
+                try:
+                    cnt = int(run_code("async page => String(await page.locator('input[type=\"file\"]').count())").strip() or "0")
+                    if cnt>0:
+                        log_info(f"list_file_inputs eval 0 but locator count={cnt}, creating dummy entries")
+                        return [{"index":i,"accept":"","name":"","id":"","multiple":False,"visible":False,"selector":"locator-count"} for i in range(cnt)]
+                except: pass
+            # raw may be '"[{"index":0}]"' with outer quotes from --raw, handle it
+            raw_clean = str(raw or "").strip()
+            # If raw is quoted string like '"[]"' or "'[]'", unwrap once
+            if len(raw_clean) >= 2 and raw_clean[0] in ('"', "'") and raw_clean[-1] == raw_clean[0]:
+                try:
+                    inner = json.loads(raw_clean)
+                    if isinstance(inner, str):
+                        raw_clean = inner
+                except:
+                    raw_clean = raw_clean[1:-1]
+            parsed = json.loads(raw_clean or "[]")
+            if isinstance(parsed, list): return parsed
+            if isinstance(parsed, dict):
+                vals = list(parsed.values())
+                if vals and isinstance(vals[0], dict): return vals
+            return []
+        except Exception as e:
+            if "modal" in str(e).lower() and _attempt == 0:
+                log_warn(f"list_file_inputs modal blocked, dismissing: {str(e)[:200]}")
+                try: cli(["press", "Escape"], allow_failure=True); sleep(400)
+                except: pass
+                continue
+            try: log_warn(f"list_file_inputs failed: {e}, returning []")
             except: pass
-        # raw may be '"[{"index":0}]"' with outer quotes from --raw, handle it
-        raw_clean = str(raw or "").strip()
-        # If raw is quoted string like '"[]"' or "'[]'", unwrap once
-        if len(raw_clean) >= 2 and raw_clean[0] in ('"', "'") and raw_clean[-1] == raw_clean[0]:
-            try:
-                # Try to parse as JSON string containing JSON
-                inner = json.loads(raw_clean)
-                if isinstance(inner, str):
-                    raw_clean = inner
-            except:
-                # Strip outer quotes manually
-                raw_clean = raw_clean[1:-1]
-        # Debug: uncomment to see raw
-        # log_info(f"list_file_inputs raw={raw_clean[:300]}")
-        parsed = json.loads(raw_clean or "[]")
-        if isinstance(parsed, list): return parsed
-        if isinstance(parsed, dict):
-            vals = list(parsed.values())
-            if vals and isinstance(vals[0], dict): return vals
-        return []
-    except Exception as e:
-        try: log_warn(f"list_file_inputs failed: {e}, returning []")
-        except: pass
-        return []
+            return []
+    return []
 
 def reveal_file_inputs():
-    try:
-        res = eval_page("""() => {
+    for attempt in range(2):
+        try:
+            res = eval_page("""() => {
       let c=0; for(const inp of [...document.querySelectorAll('input[type="file"]')]){
         try{
           if(inp.style.display==='none' || getComputedStyle(inp).display==='none') inp.style.display='block';
@@ -247,14 +251,31 @@ def reveal_file_inputs():
       }catch(_){}
       return String(c);
     }""")
-        # res may be '"2"' with quotes from eval -- strip non-digits
-        clean_res = re.sub(r'[^0-9]', '', str(res) or '')
-        num = int(clean_res or 0)
-        log_info(f"reveal_file_inputs: ensured {num} inputs visible and scrolled (raw={repr(res)[:40]})")
-        return num
-    except Exception as e:
-        log_warn(f"reveal_file_inputs failed: {e}")
-        return 0
+            # res may be '"2"' with quotes from eval -- strip non-digits
+            clean_res = re.sub(r'[^0-9]', '', str(res) or '')
+            num = int(clean_res or 0)
+            log_info(f"reveal_file_inputs: ensured {num} inputs visible and scrolled (raw={repr(res)[:40]})")
+            return num
+        except Exception as e:
+            if "modal" in str(e).lower() and attempt == 0:
+                log_warn(f"reveal_file_inputs modal blocked, dismissing: {str(e)[:200]}")
+                try:
+                    cli(["press", "Escape"], allow_failure=True); sleep(400)
+                    try: run_code("async page => { const btn=[...document.querySelectorAll('button')].find(b=>/Cancel/.test(b.innerText||'')); if(btn) btn.click(); return 'clicked-cancel'; }")
+                    except: pass
+                    sleep(300)
+                except: pass
+                continue
+            try:
+                raw2 = run_code("""async page => { let c=0; for(const inp of await page.$$('input[type="file"]')){ try{ await inp.evaluate(el=>{ if(el.style.display==='none') el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1'; el.style.width='100px'; el.style.height='20px'; el.removeAttribute('hidden'); el.classList.remove('hidden'); }); c++; }catch(_){}} try{ const b=await page.$('button:has-text("Add media")'); if(b) await b.scrollIntoViewIfNeeded(); }catch(_){} return String(c); }""")
+                clean2 = re.sub(r'[^0-9]', '', str(raw2) or '')
+                num2 = int(clean2 or 0)
+                log_info(f"reveal_file_inputs fallback ensured {num2}")
+                return num2
+            except Exception as e2:
+                log_warn(f"reveal_file_inputs failed: {e2}")
+                return 0
+    return 0
 
 def drop_files(target, abs_paths):
     for p in abs_paths:

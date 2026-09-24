@@ -229,8 +229,11 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
     if drop_target: drop_targets.append(drop_target)
     if label and "Gallery" in label:
         drop_targets.extend([
+            'locator(\'div.space-y-2\').first()',
+            'locator(\'div.space-y-2 button:has-text("Add media")\').first()',
             'locator(\'button[type="button"]:has-text("Add media")\').first()',
             'locator(\'button:has-text("Add media")\').first()',
+            'locator(\'div.space-y-2:has(button:has-text("Add media"))\').first()',
             'locator(\'div.grid:has(button:has-text("Add media"))\').first()',
         ])
     elif label=="Cover":
@@ -292,7 +295,8 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
         # Precise selectors per your HTML
         selectors=[]
         if label and "Gallery" in label:
-            selectors.extend(['button:has-text("Add media") + input[type="file"]','div.grid > input[type="file"][multiple]','div.grid input[type="file"][multiple]','div.grid input[multiple]','input[type="file"][multiple]','input[accept*="image"][multiple]'])
+            # Priority: space-y-2 is the Media Gallery container per user request (one-by-one upload here)
+            selectors.extend(['div.space-y-2 input[type="file"][multiple]','div.space-y-2 input[multiple]','div.space-y-2 > input[type="file"]','button:has-text("Add media") + input[type="file"]','div.grid > input[type="file"][multiple]','div.grid input[type="file"][multiple]','div.grid input[multiple]','input[type="file"][multiple]','input[accept*="image"][multiple]'])
         elif label=="Cover":
             selectors.extend(['input[type="file"]:not([multiple])','input[accept*="image"]:not([multiple])','input[type="file"]','input[type=file]'])
         else:
@@ -448,10 +452,16 @@ def open_sweep_create():
 
 def fill_campaign_info(report):
     # Dismiss Playwright banner modal that blocks browser_evaluate (seen as 'Tool browser_evaluate does not handle modal state')
-    try:
-        cli(["press", "Escape"], allow_failure=True)
-        sleep(300)
-    except: pass
+    # Enhanced: press Escape twice + JS click Cancel on banner via run_code, then Escape again
+    for _dismiss_try in range(2):
+        try:
+            cli(["press", "Escape"], allow_failure=True); sleep(400)
+            cli(["press", "Escape"], allow_failure=True); sleep(300)
+            # Also click Cancel button on Playwright Extension banner via JS (run_code not blocked like browser_evaluate)
+            try: run_code("async page => { const btn=[...document.querySelectorAll('button')].find(b=>/Cancel/.test(b.innerText||'')); if(btn){ btn.click(); return 'clicked-cancel'; } return 'no-cancel'; }")
+            except: pass
+            sleep(300)
+        except: pass
     fill_first_available(['locator(\'input[name="campaignInfo.title"]\')', locator("placeholder","e.g. Eras Tour Backstage Meet & Greet Experience")], sweep_title, "campaign title")
     assert_contains(body_text(), sweep_title[:20], "Title echo")
     # wait inputs
@@ -478,18 +488,21 @@ def fill_campaign_info(report):
         except: pass
     galleryOrder=[]
     strategies=[]
-    # Cover - precise per HTML dump
-    try:
-        before=gallery_tile_count()
-        log_info("Cover: HTML shows div.group with input without multiple, trying precise")
-        reveal_file_inputs(); sleep(500)
-        res=attempt_upload(drop_target='locator(\'div.group:has(input[type="file"])\').first()', click_target='locator(\'div.group:has-text("Drag & drop or click to upload")\').first()', input_nth=0, abs_paths=coverMedia, label="Cover")
-        strategies.append({"slot":"cover", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [])]})
-        report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"strategy":res["strategy"]}
-        log_info(f"cover tiles {before}->{res.get('tiles')}")
-    except Exception as e:
-        log_warn(f"cover upload failed (optional): {str(e).splitlines()[0]}")
-        report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"error":str(e).splitlines()[0]}
+    # Cover - SKIPPED per user request: not required, focus on space-y-2 Media Gallery one-by-one
+    # Previous Cover code commented out:
+    # try:
+    #     before=gallery_tile_count()
+    #     log_info("Cover: HTML shows div.group with input without multiple, trying precise")
+    #     reveal_file_inputs(); sleep(500)
+    #     res=attempt_upload(drop_target='locator(\'div.group:has(input[type="file"])\').first()', click_target='locator(\'div.group:has-text("Drag & drop or click to upload")\').first()', input_nth=0, abs_paths=coverMedia, label="Cover")
+    #     strategies.append({"slot":"cover", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [])]})
+    #     report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"strategy":res["strategy"]}
+    #     log_info(f"cover tiles {before}->{res.get('tiles')}")
+    # except Exception as e:
+    #     log_warn(f"cover upload failed (optional): {str(e).splitlines()[0]}")
+    #     report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"error":str(e).splitlines()[0]}
+    log_info("Cover upload SKIPPED - not required, focusing on space-y-2 Media Gallery")
+    report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"skipped":True,"reason":"user requested space-y-2 gallery only"}
     # Gallery - ensure visible
     try:
         log_info("Scrolling to ensure gallery visible")
@@ -503,55 +516,54 @@ def fill_campaign_info(report):
             sleep(800)
     except Exception as e:
         log_warn(f"Gallery scroll failed: {e}")
-    # Media Gallery: same as Cover but with 3-5 images, remember order for storefront check
-    # Your HTML: <div class="grid"><button>Add media</button><input multiple> is the gallery input
-    # Cover was uploaded once via its input (div.group). Now gallery should upload 3-5 images via its multiple input in ONE batch to preserve order
-    gallery_targets={'drop':'locator(\'button[type="button"]:has-text("Add media")\')','click':'locator(\'button[type="button"]:has-text("Add media")\')'}
-    # Build batch of 3-5 images: galleryMedia (2) + typeCoverage (3) = 5 total, which satisfies 3-5 requirement
-    gallery_batch = galleryMedia + typeCoverageMedia
-    # Ensure 3-5 range: take first 5, but at least 3
-    if len(gallery_batch) > 5:
-        gallery_batch = gallery_batch[:5]
-    if len(gallery_batch) < 3:
-        log_warn(f"Gallery batch only {len(gallery_batch)} images, need 3-5 - duplicating to reach 3")
-        while len(gallery_batch) < 3:
-            gallery_batch.append(galleryMedia[0])
-    log_info(f"Gallery batch upload: {len(gallery_batch)} images in order: {safe_join([pathlib.Path(f).name for f in gallery_batch], ', ')}")
-    # Ensure gallery visible
-    try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
-    except: pass
-    # Try BATCH upload first (most reliable for multiple input) - same as Cover but with 3-5 files
-    batch_success = False
+    # Media Gallery: ONE-BY-ONE in div.space-y-2 per user request (Cover skipped)
+    # Previous batch logic replaced: now upload each galleryMedia image individually into space-y-2
+    # HTML: div.space-y-2 contains Media Gallery heading + div.grid > button Add media + input[multiple]
+    # Requirement: preserve order exactly as galleryMedia (bigfolio-teamwork.jpg -> nectar-610.webp -> fandiem-610.webp)
+    gallery_targets={'drop':'locator(\'div.space-y-2\').first()','click':'locator(\'div.space-y-2 button:has-text("Add media")\').first()'}
+    # Use exactly galleryMedia (3 CDN images in order) - no batch, one-by-one into space-y-2
+    gallery_batch = galleryMedia  # keep user-provided order, 3 images
+    # Ensure gallery container visible before any upload - target space-y-2
     try:
-        inputs_now = list_file_inputs()
-        pref = 1 if len(inputs_now)>1 else 0
-        # Batch upload all 3-5 at once via the multiple input
-        res = attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=pref, abs_paths=gallery_batch, label=f"Gallery[batch {len(gallery_batch)} images]")
-        galleryOrder.extend([pathlib.Path(f).name for f in gallery_batch])
-        strategies.append({"slot":"gallery","file":"batch", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or gallery_batch)]})
-        batch_success = True
-        sleep(1200)
-        log_info(f"Gallery batch success: tiles={gallery_tile_count()} items={gallery_items_text()} order={safe_join(galleryOrder, ', ')}")
+        run_code("async page => { const g=document.querySelector('div.space-y-2'); if(g) g.scrollIntoView({behavior:'instant',block:'center'}); else { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); } return 'scrolled-space-y-2'; }")
+        sleep(600)
+        # Also reveal file inputs now that space-y-2 is visible
+        reveal_file_inputs(); sleep(400)
+        debug_space = run_code("async page => { const g=document.querySelector('div.space-y-2'); return g ? g.outerHTML.slice(0,1000) : 'no-space-y-2'; }")
+        log_info(f"space-y-2 HTML before upload: {str(debug_space)[:600]}")
     except Exception as e:
-        log_warn(f"Gallery batch upload failed, falling back to one-by-one: {str(e).splitlines()[0]}")
-        # Fallback: one-by-one as before
-        for file in galleryMedia:
-            try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
-            except: pass
-            inputs_now=[]
-            for attempt in range(6):
-                reveal_file_inputs()
-                inputs_now=list_file_inputs()
-                if len(inputs_now)>0: break
-                log_info(f"Gallery waiting inputs {attempt+1} found {len(inputs_now)}")
-                sleep(1000)
-            log_info(f"Gallery upload {pathlib.Path(file).name} with {len(inputs_now)} inputs")
-            pref = 1 if len(inputs_now)>1 else 0
-            res=attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=pref, abs_paths=[file], label=f"Gallery[{pathlib.Path(file).name}]")
-            galleryOrder.append(pathlib.Path(file).name)
-            strategies.append({"slot":"gallery","file":pathlib.Path(file).name, **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [file])]})
-            sleep(1200)
-            log_info(f"After {pathlib.Path(file).name}: tiles={gallery_tile_count()} items={gallery_items_text()}")
+        log_warn(f"space-y-2 scroll/debug failed: {e}")
+    log_info(f"Gallery one-by-one upload into space-y-2: {len(gallery_batch)} images in order: {safe_join([pathlib.Path(f).name for f in gallery_batch], ', ')}")
+    # One-by-one upload loop - preserves order for storefront verification
+    batch_success = False  # not used for batch, keeps coverage logic simple
+    for file in gallery_batch:
+        try: run_code("async page => { const g=document.querySelector('div.space-y-2'); if(g) g.scrollIntoView({block:'center'}); const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
+        except: pass
+        inputs_now=[]
+        for attempt in range(6):
+            reveal_file_inputs()
+            inputs_now=list_file_inputs()
+            if len(inputs_now)>0: break
+            log_info(f"Gallery space-y-2 waiting inputs {attempt+1} found {len(inputs_now)}")
+            sleep(800)
+        # Determine correct input index for gallery: prefer input[multiple] inside space-y-2
+        # Try to find which input is multiple and inside space-y-2 via JS helper if needed
+        try:
+            space_info = run_code('async page => { const g=document.querySelector("div.space-y-2"); if(!g) return "no-g"; const inputs=[...g.querySelectorAll("input[type=file]")]; return JSON.stringify(inputs.map((el,i)=>({idx:i, multiple:el.multiple}))); }')
+            log_info(f"space-y-2 inputs: {space_info}")
+        except: pass
+        log_info(f"Gallery upload {pathlib.Path(file).name} into space-y-2 with {len(inputs_now)} inputs")
+        pref = 1 if len(inputs_now)>1 else 0
+        # Try to prefer space-y-2 multiple input; if we have 2 inputs, typically 0=Cover (no multiple), 1=Gallery (multiple) -> use 1
+        # attempt_upload will try space-y-2 selectors first (highest priority)
+        res=attempt_upload(drop_target=gallery_targets["drop"], click_target=gallery_targets["click"], input_nth=pref, abs_paths=[file], label=f"Gallery[{pathlib.Path(file).name}]")
+        galleryOrder.append(pathlib.Path(file).name)
+        strategies.append({"slot":"gallery-space-y-2","file":pathlib.Path(file).name, **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [file])]})
+        sleep(1200)
+        try:
+            log_info(f"After {pathlib.Path(file).name}: tiles={gallery_tile_count()} items={gallery_items_text()} order={safe_join(galleryOrder, ', ')}")
+        except Exception as e:
+            log_warn(f"After upload count failed: {e}")
     coverage=[]
     # If batch succeeded, type coverage already included; if not, handle type coverage separately
     if not batch_success:
