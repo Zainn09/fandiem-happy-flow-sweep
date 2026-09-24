@@ -375,7 +375,13 @@ def fill_first_available(targets, value, label):
 
 # ---------- screens ----------
 def open_sweep_create():
-    tab_new(f"{ADMIN}/admin")
+    # Keep working in same tab as user requested - was opening new tab before, now use goto
+    # It was working fine before last commit, so revert to same-tab navigation
+    try:
+        goto(f"{ADMIN}/admin")
+    except Exception as e:
+        log_warn(f"goto failed {e}, trying tab_new fallback")
+        tab_new(f"{ADMIN}/admin")
     sleep(3000)
     loaded=False
     for i in range(10):

@@ -602,7 +602,8 @@ function fillFirstAvailable(targets, value, label) {
 
 // --------------------------------------------------- screen 1: nav -------
 async function openSweepCreate() {
-  tabNew(`${ADMIN}/admin`);
+  // User: keep working in same tab instead of opening new tabs - was working fine before last commit
+  try { goto(`${ADMIN}/admin`); } catch (e) { logWarn(`goto failed ${e.message}, fallback to tabNew`); tabNew(`${ADMIN}/admin`); }
   await sleep(3000);
 
   // Wait for page to load and contain Campaigns or Dashboard
