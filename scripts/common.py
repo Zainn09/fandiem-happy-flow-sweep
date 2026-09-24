@@ -550,73 +550,62 @@ def select_combobox(combobox_target, preferred_name="", label="Combobox"):
         return document.body;
       };
       const dlg=getDialog();
-      const scope=dlg || document;
-      // Wait a bit for options to populate if empty
+      // For this UI, listbox is global: <div role="listbox"><button role="option">5B ARTISTS @5BArtists</button> - search globally
+      const scope=dlg && dlg.querySelector('[role="option"]') ? dlg : document;
       let tries=0;
-      while (tries<3) {
-        const has=[...scope.querySelectorAll('[role="option"], [data-slot="select-item"], [cmdk-item], div[data-value]')].filter(e=>e.offsetParent!==null).length;
-        const hasAt=[...scope.querySelectorAll('div')].filter(e=> (e.innerText||'').includes('@') && e.getBoundingClientRect().width>80).length;
-        if (has>0 || hasAt>0) break;
-        await new Promise(r=>setTimeout(r,600));
+      while (tries<4) {
+        const hasGlobal=[...document.querySelectorAll('[role="option"]')].filter(e=>e.offsetParent!==null).length;
+        const hasScope=[...scope.querySelectorAll('[role="option"], [data-slot="select-item"], [cmdk-item], div[data-value]')].filter(e=>e.offsetParent!==null).length;
+        const hasAt=[...document.querySelectorAll('div, button')].filter(e=> (e.innerText||'').includes('@5BArtists') || (e.innerText||'').includes('@3oh')).length;
+        if (hasGlobal>0 || hasScope>0 || hasAt>0) break;
+        await new Promise(r=>setTimeout(r,700));
         tries++;
       }
       const selectors=[
+        '[role="listbox"] [role="option"]',
+        'div[role="listbox"] button[role="option"]',
         '[role="option"]',
         '[data-slot="select-item"]',
         '[cmdk-item]',
         'div[data-value]',
-        '[data-radix-collection-item]',
-        '[data-slot="dialog-content"] [role="option"]',
-        '[role="dialog"] div[data-value]',
-        'div[role="listbox"] [role="option"]'
+        '[data-radix-collection-item]'
       ];
       const findOptions = () => {
-        // Priority 1: official option roles inside dialog
         for (const sel of selectors) {
           try {
-            const els=[...scope.querySelectorAll(sel)].filter(e=>{
+            const els=[...document.querySelectorAll(sel)].filter(e=>{
               const r=e.getBoundingClientRect();
               const t=(e.innerText||'').trim();
-              return r.width>50 && r.height>10 && t.length>1 && t.length<120 && !/Select talents|Select one or more charities|Search brands/.test(t);
+              return r.width>50 && r.height>12 && t.length>1 && t.length<120 && !/Select talents|Select one or more charities|Search brands/.test(t) && r.top>20;
             });
+            const visible=els.filter(e=> e.offsetParent!==null || e.getClientRects().length>0);
+            if (visible.length) return {found:true, sel, els: visible};
             if (els.length) return {found:true, sel, els};
           } catch(e){}
         }
-        // Priority 2: any visible element in dialog that looks like talent row (has @ handle, e.g., "5B ARTISTS @5BArtists")
         try {
-          const atEls=[...scope.querySelectorAll('div, button, [role="option"]')].filter(e=>{
+          const atEls=[...document.querySelectorAll('button[role="option"], div[role="option"], button')].filter(e=>{
             const r=e.getBoundingClientRect();
             const t=(e.innerText||'').trim();
-            // Must contain @ and be a single row (not container with many children)
-            return r.width>150 && r.height>28 && r.height<60 && r.top>50 && t.includes('@') && t.length>4 && t.length<80 && t.split('\n').length<=2;
+            return r.width>120 && r.height>24 && r.height<70 && t.includes('@') && t.length>4 && t.length<90;
           });
-          // Deduplicate and pick those that are leaf nodes (no child with same @)
-          const leaf=[];
-          for (const el of atEls) {
-            const hasChildWithAt=[...el.querySelectorAll('div')].some(c=> (c.innerText||'').includes('@') && c!==el);
-            if (!hasChildWithAt) leaf.push(el);
-          }
-          if (leaf.length) return {found:true, sel:'at-leaf', els: leaf};
-          if (atEls.length) return {found:true, sel:'at-any', els: atEls};
+          if (atEls.length) return {found:true, sel:'at-global', els: atEls};
         } catch(e){}
-        // Fallback: any div in dialog with talent-like name
         try {
-          const all=[...scope.querySelectorAll('div, button, span')].filter(e=>{
-            const r=e.getBoundingClientRect();
-            const t=(e.innerText||'').trim();
-            return r.width>100 && r.height>20 && r.top>50 && t.length>2 && t.length<80 && !t.includes('Select talents') && !t.includes('Select one or more') && !t.includes('Search brands') && (e.getAttribute('role')==='option' || e.hasAttribute('data-value') || /[A-Z][a-z]+ [A-Z]/.test(t) || t.includes('ARTISTS') || /^[A-Z0-9 ]{3,}$/.test(t));
-          });
-          const uniq=[];
-          const seen=new Set();
-          for (const el of all) { const tx=(el.innerText||'').trim().split('\n')[0]; if (!seen.has(tx) && tx && tx.includes(' ') ) { seen.add(tx); uniq.push(el); } if (uniq.length>=15) break; }
-          if (uniq.length) return {found:true, sel:'fallback-div', els: uniq};
+          const lb=document.querySelector('[role="listbox"]');
+          if (lb) {
+            const lbOpts=[...lb.querySelectorAll('button')].filter(e=> e.getBoundingClientRect().width>80);
+            if (lbOpts.length) return {found:true, sel:'listbox-buttons', els: lbOpts};
+          }
         } catch(e){}
         return {found:false, sel:'none', els:[]};
       };
       const chk=findOptions();
       if (!chk.found) {
-        const html=(scope.innerHTML||'').slice(0,1200).replace(/\n/g,' ');
-        return 'no-options:'+JSON.stringify({selTried: selectors.slice(0,3), scopeTag: scope.tagName, html: html.slice(0,700)});
+        const lb=document.querySelector('[role="listbox"]');
+        const html=(lb ? lb.innerHTML : (scope.innerHTML||'')).slice(0,1200).replace(/\n/g,' ');
+        const allOpts=[...document.querySelectorAll('[role="option"]')].length;
+        return 'no-options:'+JSON.stringify({selTried: selectors.slice(0,3), scopeTag: scope.tagName, hasListbox: !!lb, allOpts, html: html.slice(0,700)});
       }
       // Filter by want if provided
       let candidates=chk.els;
@@ -675,17 +664,32 @@ def select_combobox(combobox_target, preferred_name="", label="Combobox"):
         except Exception as e:
             log_warn(f"{name}: attempt {attempt+1} failed {e}")
         sleep(1000)
-    # Fallback: try list_combobox_options with dialog scope
     try:
-        # Try via run_code to click first option in dialog directly
         direct = run_code("""async page => {
-            const dlg=document.querySelector('[role="dialog"]') || document.querySelector('[data-slot="dialog-content"]') || document.body;
-            const opts=[...dlg.querySelectorAll('[role="option"], [data-slot="select-item"], div[data-value], [cmdk-item]')].filter(e=>e.offsetParent!==null);
-            if (!opts.length) return 'no-opts-direct:'+dlg.innerHTML.slice(0,500).replace(/\n/g,' ');
-            const first=opts[0];
-            first.click();
-            return 'clicked-direct:'+(first.innerText||'').slice(0,60);
-        }""")
+            const lb=document.querySelector('[role="listbox"]');
+            const scope=lb || document.querySelector('[role="dialog"]') || document.body;
+            const opts=[...scope.querySelectorAll('[role="option"]')].filter(e=>e.offsetParent!==null);
+            if (!opts.length) {
+                const fallback=[...document.querySelectorAll('button[role="option"]')].filter(e=>e.offsetParent!==null);
+                if (fallback.length) {
+                    fallback[0].click();
+                    return 'clicked-direct-fallback:'+(fallback[0].innerText||'').slice(0,60);
+                }
+                return 'no-opts-direct:'+scope.innerHTML.slice(0,500).replace(/\n/g,' ');
+            }
+            let tgt=opts[0];
+            const want=(TEXT_WANT2||'').toLowerCase();
+            if (want) {
+                const m=opts.find(e=> (e.innerText||'').toLowerCase().includes(want));
+                if (m) tgt=m;
+            } else {
+                tgt=opts[Math.floor(Math.random()*Math.min(opts.length,10))] || opts[0];
+            }
+            tgt.scrollIntoView({block:'center'});
+            await new Promise(r=>setTimeout(r,200));
+            tgt.click();
+            return 'clicked-direct:'+(tgt.innerText||'').slice(0,60);
+        }""".replace("TEXT_WANT2", json.dumps(want)))
         log_info(f"{name}: direct fallback {direct}")
         if "clicked-direct" in str(direct):
             sleep(800)
