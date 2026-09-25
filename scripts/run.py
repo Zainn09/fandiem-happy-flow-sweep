@@ -1160,10 +1160,51 @@ def main():
             click_continue_and_expect("Sweeps Info")
         def stub_sweeps():
             heading("Sweeps Info")
-            fields=[('input[name="prizeDetails.prizeTitle"]',data["prizeReward"]),('input[name="prizeDetails.numberOfWinners"]',data["numberOfWinners"]),('input[name="prizeDetails.guests"]',data["numberOfGuests"]),('input[name="prizeDetails.prizeValue"]',data["prizeValue"]),('input[name="rulesDates.minimumAge"]',data["minimumAge"]),('input[name="rulesDates.eligibleCountries"]',data["eligibleCountries"]),('input[name="rulesDates.startDate"]',data["startDate"]),('input[name="rulesDates.endDate"]',data["endDate"]),('textarea[name="prizeDetails.winnerAnnouncementContent"]',data["winnerAnnouncementContent"]),('input[name="rulesDates.drawDate"]',data["drawDate"])]
-            for css,val in fields:
-                try: fill(f'locator({json.dumps(css)})', val)
-                except: pass
+            try:
+                # Fill basic fields first (non-dates) as before
+                for css,val in [('input[name="prizeDetails.prizeTitle"]',data["prizeReward"]),('input[name="prizeDetails.numberOfWinners"]',data["numberOfWinners"]),('input[name="prizeDetails.guests"]',data["numberOfGuests"]),('input[name="prizeDetails.prizeValue"]',data["prizeValue"]),('input[name="rulesDates.minimumAge"]',data["minimumAge"]),('input[name="rulesDates.eligibleCountries"]',data["eligibleCountries"])]:
+                    try:
+                        fill(f'locator({json.dumps(css)})', val)
+                    except: pass
+                    sleep(200)
+                # Sweep Start Date - click then fill as requested
+                try:
+                    cli(["click", 'locator(\'input[name="rulesDates.startDate"]\')'], allow_failure=True)
+                    sleep(500)
+                    fill('locator(\'input[name="rulesDates.startDate"]\')', data["startDate"])
+                    log_info(f"filled Sweep Start Date {data['startDate']} via click+fill")
+                    sleep(300)
+                except Exception as e:
+                    log_warn(f"startDate click+fill failed {e}")
+                    try:
+                        fill('locator(\'input[name="rulesDates.startDate"]\')', data["startDate"])
+                    except: pass
+                # Sweep End Date - click then fill as requested
+                try:
+                    cli(["click", 'locator(\'input[name="rulesDates.endDate"]\')'], allow_failure=True)
+                    sleep(500)
+                    fill('locator(\'input[name="rulesDates.endDate"]\')', data["endDate"])
+                    log_info(f"filled Sweep End Date {data['endDate']} via click+fill")
+                    sleep(300)
+                except Exception as e:
+                    log_warn(f"endDate click+fill failed {e}")
+                    try:
+                        fill('locator(\'input[name="rulesDates.endDate"]\')', data["endDate"])
+                    except: pass
+                # Remaining fields: drawDate and winnerAnnouncement
+                for css,val in [('input[name="rulesDates.drawDate"]',data["drawDate"]),('textarea[name="prizeDetails.winnerAnnouncementContent"]',data["winnerAnnouncementContent"])]:
+                    try:
+                        fill(f'locator({json.dumps(css)})', val)
+                    except: pass
+                    sleep(200)
+                # Verify no required errors remain for dates
+                errs = capture_visible_errors()
+                if errs:
+                    log_warn(f"sweeps info errors after fill: {errs}")
+            except Exception as e:
+                log_warn(f"sweeps stub error {e}")
+                import traceback
+                log_warn(traceback.format_exc()[:500])
             click_continue_and_expect("Tracking")
         step(report, "Create two Promotion Tabs", lambda: stub_promotion())
         step(report, "Create Prize Detail", lambda: stub_prize())
