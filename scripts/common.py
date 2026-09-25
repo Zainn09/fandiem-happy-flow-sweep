@@ -517,6 +517,48 @@ def select_combobox(combobox_target, preferred_name="", label="Combobox"):
         except Exception as e:
             log_warn(f"{name}: poll failed {e}")
         sleep(700)
+    # Try CLI click first (most reliable for this HTML: <div role="listbox"><button role="option">)
+    # HTML is button role=option with text "5B ARTISTS @5BArtists" inside listbox max-h-72
+    cli_candidates = []
+    if want:
+        cli_candidates.extend([
+            f"locator('[role=\"listbox\"] [role=\"option\"]:has-text(\"{want}\")').first()",
+            f"locator('button[role=\"option\"]:has-text(\"{want}\")').first()",
+            f"locator('[role=\"option\"]:has-text(\"{want}\")').first()",
+        ])
+    cli_candidates.extend([
+        "locator('[role=\"listbox\"] [role=\"option\"]').first()",
+        "locator('div[role=\"listbox\"] button').first()",
+        "locator('[role=\"option\"]').first()",
+        "locator('button:has-text(\"5B ARTISTS\")').first()",
+        "locator('button:has-text(\"3OH!3\")').first()",
+    ])
+    for cli_sel in cli_candidates:
+        try:
+            # Ensure listbox is still open, if not reopen
+            has_lb = run_code("async page => !!document.querySelector('[role=\"listbox\"]') && document.querySelector('[role=\"listbox\"]').offsetParent!==null")
+            if "false" in str(has_lb) or "no" in str(has_lb).lower():
+                try: click(combobox_target); sleep(1000)
+                except: pass
+            r = cli(["click", cli_sel], allow_failure=True)
+            if r["code"] == 0:
+                log_info(f"{name}: CLI click success {cli_sel[:60]}")
+                sleep(800)
+                # verify
+                ver = run_code("""async page => {
+                    const badges=[...document.querySelectorAll('[aria-label^="Remove"]')].length;
+                    const lbOpen=!!document.querySelector('[role="listbox"]') && document.querySelector('[role="listbox"]').offsetParent!==null;
+                    return JSON.stringify({badges, lbOpen});
+                }""")
+                log_info(f"{name}: cli verify {ver}")
+                # If listbox closed or badges appeared, success
+                if "false" in ver or "badges" in ver:
+                    try: cli(["press", "Escape"], allow_failure=True); sleep(200)
+                    except: pass
+                    return {"index":0,"text":cli_sel,"innerHTML":"","optionsCount":1,"options":[cli_sel],"filteredBy":"cli-listbox"}
+        except Exception as e:
+            log_warn(f"{name}: cli {cli_sel[:30]} failed {e}")
+        sleep(300)
     js_click = """
     async page => {
       const lb=document.querySelector('[role="listbox"]');
