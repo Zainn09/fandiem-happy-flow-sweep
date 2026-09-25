@@ -161,8 +161,8 @@ def click_continue_and_expect(expected):
         else: last=r["stderr"] or r["stdout"]
     if not clicked:
         log_warn(f"Standard CONTINUE failed ({last[:200]}), JS")
-        js=run_code("""async page => {
-      const b=[...document.querySelectorAll('button')].filter(x=>/CONTINUE|Continue/.test(x.innerText||'')); const g=b.find(x=>x.getAttribute('data-variant')==='gradient'||/gradient/.test(x.className||'')); const t=g||b[b.length-1]; if(!t) return 'no-btn:'+[...document.querySelectorAll('button')].map(x=>(x.innerText||'').trim()).filter(x=>x).slice(-10).join('|'); if(t.disabled) return 'disabled:'+t.innerText; t.click(); return 'clicked:'+t.innerText; }""")
+        js=run_code("""async page => { return await page.evaluate(() => {
+      const b=[...document.querySelectorAll('button')].filter(x=>/CONTINUE|Continue/.test(x.innerText||'')); const g=b.find(x=>x.getAttribute('data-variant')==='gradient'||/gradient/.test(x.className||'')); const t=g||b[b.length-1]; if(!t) return 'no-btn:'+[...document.querySelectorAll('button')].map(x=>(x.innerText||'').trim()).filter(x=>x).slice(-10).join('|'); if(t.disabled) return 'disabled:'+t.innerText; t.click(); return 'clicked:'+t.innerText; }); }""")
         log_info(f"JS CONTINUE: {js}")
         if str(js).startswith("clicked"): clicked="js:"+js
         else: raise RuntimeError(f"CONTINUE not found. JS: {js}")
@@ -174,7 +174,7 @@ def click_continue_and_expect(expected):
         log_warn(f"Did not reach {expected}, retry. Errors: {safe_join(errs,' | ') or 'none'}")
         try:
             cli(["click", targets[0]], allow_failure=True); sleep(1000)
-            run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }"); sleep(1500)
+            run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }); }"); sleep(1500)
         except: pass
         errs=capture_visible_errors()
         ok=wait_for_text(expected,15000)
@@ -888,14 +888,64 @@ def main():
             try:
                 click_first([locator("role","button",{"name":"Add Prize Detail"})+".first()", 'locator(\'button:has-text("Add Prize Detail")\').first()'], "Add Prize Detail")
                 sleep(1200)
-                # mark modal - simplified
-                run_code("async page => { const m=document.querySelector('[role=\"dialog\"]')||document.querySelector('[data-slot=\"dialog-content\"]'); if(m) m.setAttribute('data-qa-modal','1'); return 'ok'; }")
-                # fill emoji and description via JS
-                run_code(f"async page => {{ const m=document.querySelector('[data-qa-modal=\"1\"]')||document; const inp=m.querySelector('input[placeholder*=\"emoji\" i]')||m.querySelector('input[maxlength=\"4\"]')||m.querySelector('input'); if(inp){{inp.focus(); inp.value={json.dumps(data['prizeEmoji'])}; inp.dispatchEvent(new Event('input',{{bubbles:true}}));}} const ta=m.querySelector('textarea')||m.querySelector('[contenteditable=\"true\"]'); if(ta){{ if(ta.tagName==='TEXTAREA'){{ta.value={json.dumps(data['prizeDescription'])}; ta.dispatchEvent(new Event('input',{{bubbles:true}}));}} else{{ta.focus(); document.execCommand('selectAll'); document.execCommand('insertText',false,{json.dumps(data['prizeDescription'])});}} }} return 'ok'; }}")
+                # Wait for modal visible - robust check for emoji input
+                for _mi in range(6):
+                    try:
+                        _vis = eval_page("() => !!document.querySelector('input[placeholder=\"Enter emoji\"]')")
+                        if "true" in str(_vis).lower():
+                            log_info("Prize modal visible")
+                            break
+                    except: pass
+                    sleep(500)
+                # Fill emoji via CLI fill (reliable) + fallback evaluate
+                try:
+                    fill('locator(\'input[placeholder="Enter emoji"]\')', data["prizeEmoji"])
+                    log_info("filled emoji via fill")
+                except Exception as _e:
+                    log_warn(f"emoji fill via locator failed {_e}")
+                    try:
+                        run_code(f"async page => {{ return await page.evaluate((val) => {{ const inp=document.querySelector('input[placeholder=\"Enter emoji\"]')||document.querySelector('input[maxlength=\"4\"]'); if(inp){chr(123)} inp.focus(); inp.value=val; inp.dispatchEvent(new Event('input',{chr(123)}bubbles:true{chr(125)})); inp.dispatchEvent(new Event('change',{chr(123)}bubbles:true{chr(125)})); return 'ok:'+inp.value; {chr(125)} return 'no-inp'; }}, {json.dumps(data['prizeEmoji'])}) }}")
+                    except Exception as _e2:
+                        log_warn(f"emoji fallback failed {_e2}")
+                # Fill description - modal tiptap (placeholder "Enter the description...")
+                try:
+                    _val_json = json.dumps(data["prizeDescription"])
+                    run_code('async page => { return await page.evaluate((val) => { let modal=[...document.querySelectorAll("div")].find(d=> d.innerText && d.innerText.includes("Add Prize Detail") && d.querySelector("[contenteditable=true]")) || document; let el=modal.querySelector(".tiptap") || modal.querySelector(".ProseMirror") || modal.querySelector("[contenteditable=true]") || document.querySelector("[data-placeholder=\"Enter the description...\"]") || document.querySelector("[contenteditable=true]"); if(!el){ const all=[...document.querySelectorAll("[contenteditable=true]")]; el=all[all.length-1]; } if(el){ el.focus(); el.scrollIntoView({block:"center"}); document.execCommand("selectAll", false, null); const ok=document.execCommand("insertText", false, val); el.dispatchEvent(new Event("input",{bubbles:true})); if(! ((el.innerText||"").includes(val.slice(0,10)))){ el.innerHTML="<p>"+val.replace(/</g,"&lt;")+"</p>"; el.dispatchEvent(new Event("input",{bubbles:true})); el.dispatchEvent(new Event("change",{bubbles:true})); } return "filled:"+(el.innerText||"").slice(0,50); } return "no-el"; }, ' + _val_json + ') }')
+                    sleep(600)
+                    _chk = run_code('async page => { return await page.evaluate(() => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); return (el? (el.innerText||"").slice(0,60):"no-el"); }); }')
+                    log_info(f"prize description check: {_chk}")
+                except Exception as _e:
+                    log_warn(f"prize description fill failed {_e}")
+                    try:
+                        fill('locator(\'[contenteditable="true"]\').last()', data["prizeDescription"])
+                    except: pass
                 sleep(500)
-                # save
-                run_code("async page => { const m=document.querySelector('[data-qa-modal=\"1\"]'); const b=[...m.querySelectorAll('button')].find(x=>/Add Prize Detail|Add Price Detail/i.test(x.innerText||'')); if(b) b.click(); return 'clicked'; }")
-                sleep(1200)
+                # Click Add Prize Detail inside modal (save) - use last button
+                try:
+                    _r = cli(["click", 'locator(\'button:has-text("Add Prize Detail")\').last()'], allow_failure=True)
+                    if _r["code"]==0:
+                        log_info("clicked Add Prize Detail save via CLI last()")
+                    else:
+                        log_warn(f"CLI save click failed {str(_r['stderr'])[:200]}, fallback evaluate")
+                        run_code("async page => { return await page.evaluate(() => { const modals=[...document.querySelectorAll('div')].filter(d=> d.querySelector && d.querySelector('[contenteditable=true]')); let btn=null; for(const m of modals){ const b=[...m.querySelectorAll('button')].find(x=> /Add Prize Detail/i.test(x.innerText||'')); if(b){ btn=b; break; } } if(!btn) btn=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Prize Detail'); if(btn){ btn.click(); return 'clicked:'+btn.innerText.slice(0,30); } return 'no-btn'; }); }")
+                except Exception as _e:
+                    log_warn(f"save click failed {_e}")
+                    try:
+                        run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Prize Detail'); if(b) b.click(); return 'ok'; }); }")
+                    except: pass
+                sleep(1500)
+                # Verify modal closed, press Escape if still open
+                for _ci in range(6):
+                    try:
+                        _still = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter emoji\"]'); return el && el.offsetParent!==null ? 'open' : 'closed'; }")
+                        if "closed" in str(_still).lower():
+                            log_info("Prize modal closed")
+                            break
+                        if _ci==2:
+                            try: cli(["press","Escape"], allow_failure=True); sleep(300)
+                            except: pass
+                    except: pass
+                    sleep(500)
             except Exception as e:
                 log_warn(f"Prize stub: {e}")
             click_continue_and_expect("Entry Tiers")
