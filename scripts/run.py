@@ -522,7 +522,7 @@ def fill_campaign_info(report):
     # Requirement: preserve order exactly as galleryMedia (bigfolio-teamwork.jpg -> nectar-610.webp -> fandiem-610.webp)
     gallery_targets={'drop':'locator(\'div.space-y-2\').first()','click':'locator(\'div.space-y-2 button:has-text("Add media")\').first()'}
     # Use exactly galleryMedia (3 CDN images in order) - no batch, one-by-one into space-y-2
-    gallery_batch = galleryMedia  # keep user-provided order, 3 images
+    gallery_batch = galleryMedia[:1]  # TEMP single image only - other 2 commented out as requested
     # Ensure gallery container visible before any upload - target space-y-2
     try:
         run_code("async page => { const g=document.querySelector('div.space-y-2'); if(g) g.scrollIntoView({behavior:'instant',block:'center'}); else { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); } return 'scrolled-space-y-2'; }")
@@ -566,7 +566,7 @@ def fill_campaign_info(report):
             log_warn(f"After upload count failed: {e}")
     coverage=[]
     # If batch succeeded, type coverage already included; if not, handle type coverage separately
-    if not batch_success:
+    if False and not batch_success:  # TEMP commented - single image only
         for file in typeCoverageMedia:
             name=pathlib.Path(file).name
             try:

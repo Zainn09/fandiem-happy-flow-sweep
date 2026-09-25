@@ -941,7 +941,7 @@ async function fillCampaignInfo(report) {
     click: `locator('div.space-y-2 button:has-text("Add media")').first()`
   };
   // Use exactly galleryMedia (3 CDN images in order) - no batch, one-by-one into space-y-2
-  const galleryBatch = [...galleryMedia]; // keep user-provided order, 3 images
+  const galleryBatch = [...galleryMedia].slice(0,1); // TEMP single image only
   // Ensure gallery container visible before any upload - target space-y-2
   try {
     runCode(`async page => { const g=document.querySelector('div.space-y-2'); if(g) g.scrollIntoView({behavior:'instant',block:'center'}); else { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); } return 'scrolled-space-y-2'; }`);
@@ -988,7 +988,7 @@ async function fillCampaignInfo(report) {
 
   // Type coverage: if batch succeeded, already included; else try separately
   let coverage = [];
-  if (!batchSuccess) {
+  if (false && !batchSuccess) { // TEMP single image - commented
     coverage = [];
     for (const file of typeCoverageMedia) {
       const name = path.basename(file);
