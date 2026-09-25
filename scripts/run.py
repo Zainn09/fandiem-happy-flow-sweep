@@ -1065,19 +1065,78 @@ def main():
             click_continue_and_expect("Entry Tiers")
         def stub_tier():
             heading("Entry Tiers")
-            # add custom tier simplified
             try:
-                # click Add Entry Tier
-                click(locator("role","button",{"name":"Add Entry Tier"}))
-                sleep(900)
-                snap=entry_tier_snapshot()
-                if snap:
-                    idx=snap[-1]["idx"]
-                    fill(f'locator(\'input[name="entryTiers.tiers.{idx}.entries"]\')', data["customTierEntries"])
-                    fill(f'locator(\'input[name="entryTiers.tiers.{idx}.price"]\')', data["customTierPrice"])
-                    fill(f'locator(\'input[name="entryTiers.tiers.{idx}.impact"]\')', data["customTierImpact"])
+                # Ensure 9 tiers as requested - Entries Awarded max 19999, donation random
+                snap = entry_tier_snapshot()
+                log_info(f"initial tiers {len(snap)}")
+                attempts = 0
+                while len(snap) < 9 and attempts < 10:
+                    attempts += 1
+                    try:
+                        r = cli(["click", locator("role","button",{"name":"Add Entry Tier"})], allow_failure=True)
+                        if r["code"] != 0:
+                            r = cli(["click", 'locator(\'button:has-text("Add Entry Tier")\')'], allow_failure=True)
+                        if r["code"] != 0:
+                            try:
+                                run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Entry Tier'); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked'; } return 'no-btn'; }); }")
+                            except: pass
+                    except Exception as e:
+                        log_warn(f"Add Entry Tier click failed {e}")
+                    sleep(1300)
+                    try:
+                        run_code("async page => { return await page.evaluate(() => { window.scrollTo(0, document.body.scrollHeight); return 'scrolled'; }); }")
+                    except: pass
+                    sleep(500)
+                    snap = entry_tier_snapshot()
+                    log_info(f"after add attempt {attempts} tiers {len(snap)}")
+                    if len(snap) >= 9:
+                        break
+                snap = entry_tier_snapshot()
+                log_info(f"filling tiers {len(snap)}")
+                import random as _rnd
+                for tier in snap:
+                    idx = tier.get("idx")
+                    if idx is None:
+                        continue
+                    if tier.get("locked"):
+                        log_info(f"tier {idx} locked skip")
+                        continue
+                    entries = str(tier.get("entries") or "").strip()
+                    price = str(tier.get("price") or "").strip()
+                    impact = str(tier.get("impact") or "").strip()
+                    if not entries:
+                        try:
+                            fill(f'locator(\'input[name="entryTiers.tiers.{idx}.entries"]\')', "19999")
+                            log_info(f"filled tier {idx} entries 19999")
+                        except Exception as e:
+                            log_warn(f"fill entries {idx} failed {e}")
+                    elif idx == max(x.get("idx", 0) for x in snap) and entries != "19999":
+                        try:
+                            fill(f'locator(\'input[name="entryTiers.tiers.{idx}.entries"]\')', "19999")
+                            log_info(f"updated last tier {idx} entries to 19999 (was {entries})")
+                        except: pass
+                    if not price:
+                        need_price = str(_rnd.randint(25, 500))
+                        try:
+                            fill(f'locator(\'input[name="entryTiers.tiers.{idx}.price"]\')', need_price)
+                            log_info(f"filled tier {idx} price {need_price}")
+                        except Exception as e:
+                            log_warn(f"fill price {idx} failed {e}")
+                    if not impact:
+                        need_impact = f"Automated tier impact {idx+1}"
+                        try:
+                            fill(f'locator(\'input[name="entryTiers.tiers.{idx}.impact"]\')', need_impact)
+                        except: pass
+                    sleep(250)
+                snap2 = entry_tier_snapshot()
+                log_info(f"final tiers {snap2}")
+                errs = capture_visible_errors()
+                if errs:
+                    log_warn(f"after tier fill errors: {errs}")
             except Exception as e:
                 log_warn(f"Tier stub: {e}")
+                import traceback
+                log_warn(traceback.format_exc()[:900])
             click_continue_and_expect("Bonuses")
         def stub_bonus():
             heading("Bonuses")
