@@ -878,8 +878,122 @@ def main():
         # Instead we try to run the same Node steps via Python wrappers for Promotion, Prize, etc. but simplified:
         def stub_promotion():
             heading("Promotion")
-            # Add two tabs via Python - use same Node helper via run-code
-            # Simplified: just click Continue
+            # Create two Promotion Tabs via modal - user reported previous just clicked Continue skipping modal
+            # HTML: page has <button>Add Promotion Tab</button> (inside div.mx-auto w-full max-w-[682px])
+            # Modal has: <input placeholder="Enter promotion title">, <textarea placeholder="Enter the description...">, raw HTML switch, buttons Cancel/Add Promotion Tab
+            promotions = [
+                (data["promotionOne"], data["promotionDescriptionOne"]),
+                (data["promotionTwo"], data["promotionDescriptionTwo"]),
+            ]
+            for idx, (title, desc) in enumerate(promotions):
+                log_info(f"Promotion tab {idx+1}/2: {title[:40]}")
+                try:
+                    # Click Add Promotion Tab to open modal (first button on page, not modal)
+                    opened = False
+                    for attempt in range(3):
+                        try:
+                            # Try CLI click first button with that text
+                            r = cli(["click", 'locator(\'button:has-text("Add Promotion Tab")\').first()'], allow_failure=True)
+                            if r["code"]==0:
+                                log_info(f"Clicked Add Promotion Tab {idx+1} via first()")
+                                opened=True
+                                break
+                            # fallback via role
+                            r2 = cli(["click", locator("role","button",{"name":"Add Promotion Tab"})+".first()"], allow_failure=True)
+                            if r2["code"]==0:
+                                opened=True
+                                break
+                            # fallback via JS evaluate
+                            run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Promotion Tab'); if(b){ b.click(); return 'clicked'; } return 'no-btn'; }); }")
+                            opened=True
+                            break
+                        except Exception as e:
+                            log_warn(f"open attempt {attempt+1} failed {e}")
+                            sleep(500)
+                    sleep(1200)
+                    # Wait for modal visible - input placeholder Enter promotion title
+                    for _mi in range(8):
+                        try:
+                            _vis = eval_page("() => !!document.querySelector('input[placeholder=\"Enter promotion title\"]')")
+                            if "true" in str(_vis).lower():
+                                # also check offsetParent visible
+                                _vis2 = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter promotion title\"]'); return el && el.offsetParent!==null ? 'visible' : 'hidden'; }")
+                                if "visible" in str(_vis2).lower():
+                                    log_info(f"Promotion modal {idx+1} visible")
+                                    break
+                        except: pass
+                        sleep(500)
+                    # Fill title via CLI fill
+                    try:
+                        fill('locator(\'input[placeholder="Enter promotion title"]\')', title)
+                        log_info(f"filled promotion title {idx+1}")
+                        # verify via eval
+                        _chk = eval_page(f"() => document.querySelector('input[placeholder=\"Enter promotion title\"]')?.value || ''")
+                        log_info(f"title check: {_chk[:60]}")
+                    except Exception as e:
+                        log_warn(f"title fill failed {e}")
+                        try:
+                            run_code(f"async page => {{ return await page.evaluate((val) => {{ const inp=document.querySelector('input[placeholder=\"Enter promotion title\"]'); if(inp){{ inp.focus(); inp.value=val; inp.dispatchEvent(new Event('input',{{bubbles:true}})); inp.dispatchEvent(new Event('change',{{bubbles:true}})); return 'ok:'+inp.value; }} return 'no-inp'; }}, {json.dumps(title)}) }}")
+                        except: pass
+                    # Fill description textarea (modal uses textarea, not tiptap)
+                    try:
+                        # Use textarea placeholder locator - modal has textarea placeholder Enter the description...
+                        fill('locator(\'textarea[placeholder="Enter the description..."]\')', desc)
+                        log_info(f"filled promotion description {idx+1} via textarea fill")
+                    except Exception as e:
+                        log_warn(f"textarea fill failed {e}")
+                        try:
+                            # fallback via page.evaluate on textarea
+                            run_code(f"async page => {{ return await page.evaluate((val) => {{ let ta=document.querySelector('textarea[placeholder=\"Enter the description...\"]'); if(!ta) ta=document.querySelector('textarea'); if(ta){{ ta.focus(); ta.value=val; ta.dispatchEvent(new Event('input',{{bubbles:true}})); ta.dispatchEvent(new Event('change',{{bubbles:true}})); return 'ok:'+ta.value.slice(0,30); }} return 'no-ta'; }}, {json.dumps(desc)}) }}")
+                        except: pass
+                    sleep(500)
+                    # Leave raw HTML switch as default (false) - no action needed
+                    # Click Add Promotion Tab inside modal (save) - last button with that text
+                    try:
+                        _r = cli(["click", 'locator(\'button:has-text("Add Promotion Tab")\').last()'], allow_failure=True)
+                        if _r["code"]==0:
+                            log_info(f"clicked Add Promotion Tab save {idx+1} via last()")
+                        else:
+                            log_warn(f"CLI save last() failed {_r['stderr'][:200] if _r['stderr'] else _r['stdout'][:200]}")
+                            # fallback evaluate finding modal
+                            run_code("async page => { return await page.evaluate(() => { const modals=[...document.querySelectorAll('div')].filter(d=> d.querySelector && d.querySelector('textarea[placeholder=\"Enter the description...\"]')); let btn=null; for(const m of modals){ const b=[...m.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Promotion Tab'); if(b){ btn=b; break; } } if(!btn) btn=[...document.querySelectorAll('button')].filter(x=> (x.innerText||'').trim()==='Add Promotion Tab').pop(); if(btn){ btn.click(); return 'clicked:'+btn.innerText.slice(0,30); } return 'no-btn'; }); }")
+                    except Exception as e:
+                        log_warn(f"save click failed {e}")
+                        try:
+                            run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].filter(x=> (x.innerText||'').trim()==='Add Promotion Tab').pop(); if(b) b.click(); return 'ok'; }); }")
+                        except: pass
+                    sleep(1500)
+                    # Verify modal closed
+                    for _ci in range(6):
+                        try:
+                            _still = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter promotion title\"]'); return el && el.offsetParent!==null ? 'open' : 'closed'; }")
+                            if "closed" in str(_still).lower():
+                                log_info(f"Promotion modal {idx+1} closed")
+                                break
+                            if _ci==2:
+                                try: cli(["press","Escape"], allow_failure=True); sleep(300)
+                                except: pass
+                        except: pass
+                        sleep(500)
+                    # Verify tab appears on page body
+                    txt = body_text()
+                    if title[:20].lower() in txt.lower():
+                        log_info(f"Promotion tab {idx+1} verified on page")
+                    else:
+                        log_warn(f"Promotion tab {idx+1} not yet visible body {txt[:300]}")
+                        # also check via evaluate for any card containing title
+                        try:
+                            _card = run_code(f"async page => {{ return await page.evaluate((t) => {{ return document.body.innerText.includes(t.slice(0,15)) ? 'found' : 'not-found'; }}, {json.dumps(title)}) }}")
+                            log_info(f"card check {_card}")
+                        except: pass
+                except Exception as e:
+                    log_warn(f"Promotion tab {idx+1} stub error {e}")
+                    import traceback
+                    log_warn(traceback.format_exc()[:500])
+                    # try to close modal if stuck open
+                    try: cli(["press","Escape"], allow_failure=True); sleep(500)
+                    except: pass
+            # After both tabs, CONTINUE to Prize Details
             click_continue_and_expect("Prize Details")
         def stub_prize():
             heading("Prize Details")
