@@ -1573,9 +1573,28 @@ def main():
         # 12. Storefront - open admin row sweeps link and verify
         def open_storefront():
             nonlocal publicUrl
-            heading("Storefront")
+            log_info(f"Opening storefront for {sweep_title} — locating sweeps-link in admin row")
             # Try to find sweeps link via admin row snapshot or publicUrlFromAdminRow
             try:
+                # Ensure we are on admin sweeps list (needed after CREATE SWEEPS or continue mode)
+                try:
+                    cur = current_url()
+                    if "/admin/sweeps" not in cur:
+                        log_info(f"Not on admin sweeps list (cur={cur}), navigating to {ADMIN}/admin/sweeps")
+                        goto(f"{ADMIN}/admin/sweeps")
+                        sleep(1800)
+                    else:
+                        # Wait for table rows to appear
+                        for _ in range(6):
+                            cnt = eval_page("() => String(document.querySelectorAll('tr').length)")
+                            if int(re.sub(r'[^0-9]', '', cnt) or 0) > 1:
+                                break
+                            sleep(800)
+                except Exception as e:
+                    log_warn(f"admin nav check failed {e}")
+                    try:
+                        goto(f"{ADMIN}/admin/sweeps"); sleep(1800)
+                    except: pass
                 # Use sweepsRowSnapshot from common if available, else fallback to JS
                 try:
                     from common import sweeps_row_snapshot
@@ -1586,11 +1605,18 @@ def main():
                     else:
                         raise Exception("row not found")
                 except:
-                    # Fallback JS like in run.js publicUrlFromAdminRow
+                    # Fallback JS like in run.js publicUrlFromAdminRow - directly find a[aria-label="Sweeps link"] in row containing title (per your HTML)
                     raw = run_code(f"""async page => {{ return await page.evaluate((title) => {{
                         const rows = [...document.querySelectorAll('tr')].filter(tr => (tr.innerText || '').includes(title));
-                        const links = [...document.querySelectorAll('a')].filter(a => /\\/sweeps\\/[^/?#]+/i.test(a.getAttribute('href') || ''));
-                        const pick = links.find(a => rows.includes(a.closest('tr')));
+                        if (rows.length) {{
+                            const a = rows[0].querySelector('a[aria-label="Sweeps link"]');
+                            if (a) return JSON.stringify([{{ href: a.href, label: a.getAttribute('aria-label')||'', inRow: true }}]);
+                        }}
+                        const links = [...document.querySelectorAll('a[aria-label="Sweeps link"]')];
+                        if (links[0]) return JSON.stringify([{{ href: links[0].href, label: links[0].getAttribute('aria-label')||'', inRow: false }}]);
+                        const any = [...document.querySelectorAll('a')].filter(a => /\\/sweeps\\/[^/?#]+/i.test(a.getAttribute('href') || ''));
+                        const pick = any.find(a => rows.includes(a.closest('tr')));
+                        if (!pick && any.length) return JSON.stringify([{{ href: any[0].href, label: any[0].getAttribute('aria-label')||'', inRow: false }}]);
                         if (!pick) return '[]';
                         return JSON.stringify([{{ href: pick.href, label: (pick.getAttribute('aria-label') || pick.innerText || '').trim(), inRow: true }}]);
                     }}, {json.dumps(sweep_title)}) }}""")
@@ -1604,10 +1630,40 @@ def main():
                     publicUrl_local = best["href"]
                     if not publicUrl_local.startswith("http"):
                         publicUrl_local = ADMIN.rstrip("/") + "/" + publicUrl_local.lstrip("/")
-                    log_info(f"admin row sweeps link: {publicUrl_local}")
-                # Navigate to storefront
-                goto(publicUrl_local)
-                sleep(1600)
+                    log_info(f"admin row sweeps link: {publicUrl_local} (fallback)")
+                # Navigate to storefront — open sweeps-link in new tab as per your HTML (a href=\"https://fandiem.co/sweeps/...\") then verify
+                # Your snippet: <a href=\"https://fandiem.co/sweeps/qa-auto-...\" aria-label=\"Sweeps link\">
+                # Use tab_new (new tab) as requested, fallback to goto if that fails
+                navigated = False
+                # Try clicking the anchor directly (most faithful to spec)
+                try:
+                    # Click via playwright-cli locator - will open in same tab or new tab depending on target
+                    r = cli(["click", 'locator(\'a[aria-label="Sweeps link"]\').first()'], allow_failure=True)
+                    sleep(1500)
+                    cur2 = current_url()
+                    if "fandiem.co/sweeps" in cur2:
+                        publicUrl_local = cur2
+                        log_info(f"Clicked sweeps link directly, now at {cur2}")
+                        navigated = True
+                    elif r["code"] == 0:
+                        # Even if URL not yet changed, check again after sleep
+                        sleep(1000)
+                        cur3 = current_url()
+                        if "fandiem.co/sweeps" in cur3:
+                            publicUrl_local = cur3
+                            navigated = True
+                except Exception as e:
+                    log_warn(f"click sweeps link failed {e}")
+                if not navigated:
+                    try:
+                        tab_new(publicUrl_local)
+                        log_info(f"Opened storefront via tab_new {publicUrl_local}")
+                        navigated = True
+                    except Exception as e:
+                        log_warn(f"tab_new failed {e}, fallback to goto")
+                        goto(publicUrl_local)
+                        navigated = True
+                sleep(1800)
                 body = body_text()
                 # Assertions
                 assert_contains(body, sweep_title, "Storefront title")
@@ -1632,7 +1688,7 @@ def main():
                 raise
 
         def exercise_cart():
-            heading("Cart")
+            log_info(f"Exercising cart buttons for {sweep_title}")
             try:
                 # Ensure we are on storefront
                 if "fandiem.co/sweeps" not in current_url():
