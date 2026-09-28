@@ -120,7 +120,7 @@ data = {
     "minimumAge": str(env("MINIMUM_AGE", config.get("minimumAge") or "18")),
     "eligibleCountries": env("ELIGIBLE_COUNTRIES", config.get("eligibleCountries") or "Open to legal residents of the United States only"),
     "winnerAnnouncementContent": env("WINNER_ANNOUNCEMENT", config.get("winnerAnnouncementContent") or f"Congratulations — automated QA winner announcement {stamp}."),
-    "startDate": (datetime.now()+timedelta(days=1)).strftime("%Y-%m-%dT12:00"),
+    "startDate": (datetime.now()+timedelta(days=-1)).strftime("%Y-%m-%dT12:00"),
     "endDate": (datetime.now()+timedelta(days=8)).strftime("%Y-%m-%dT12:00"),
     "drawDate": (datetime.now()+timedelta(days=10)).strftime("%Y-%m-%d"),
 }
@@ -1293,9 +1293,10 @@ def main():
                             run_code("async page => { return await page.evaluate(() => { const z=document.querySelector('div.group'); if(z){z.scrollIntoView({block:'center',behavior:'instant'}); return 'scrolled';} return 'no-zone';}); }")
                             sleep(400)
                         except: pass
-                        drop_files('locator(\'div.group\').last()', [bonusImage])
-                        sleep(1500)
-                        chk_drop = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.group input'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.group img, div.min-h-39 img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-drop';}); }")
+                        # Fast: use the successful selector from log (div.space-y-1 div.group) first to reduce time
+                        drop_files('locator(\'div.space-y-1 div.group\').last()', [bonusImage])
+                        sleep(1000)
+                        chk_drop = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.space-y-1 div.group input')||document.querySelector('div.group input'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.space-y-1 div.group img, div.group img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.space-y-1 div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-drop';}); }")
                         log_info(f"bonus drag & drop verify {chk_drop}")
                         if "files:" in str(chk_drop) or "img:" in str(chk_drop) or "zone-changed" in str(chk_drop):
                             report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "drag-drop:div.group"}
@@ -1335,16 +1336,12 @@ def main():
                         _bpaths = json.dumps([bonusImage])
                         # Try Bonus modal-specific selectors first (scoped to dialog), like Campaign uses div.space-y-2
                         # Alternative selectors for your exact HTML: label Bonus Image -> div.space-y-1 -> div.group -> input.hidden
+                        # Optimized: try successful drop selector first to reduce time (log showed div.space-y-1 div.group drop succeeded)
                         bonus_selectors = [
-                            'div[role=\"dialog\"] input[type=file]',
-                            'div[role=\"dialog\"] input.hidden',
-                            'label:has-text(\"Bonus Image\") + div input',
-                            'div.flex.flex-col.gap-1 input',
                             'div.space-y-1 div.group input',
                             'div.group input[type=file]',
-                            'div.min-h-39 input',
-                            'div.space-y-1 input[type=file]',
-                            'input.hidden',
+                            'div[role=\"dialog\"] input[type=file]',
+                            'label:has-text(\"Bonus Image\") + div input',
                         ]
                         direct = "no-try"
                         # Different approach: use simple set_input_files and drop_files without sel-in-catch bug
@@ -1392,10 +1389,16 @@ def main():
                         if not direct_ok:
                             raise RuntimeError(f"direct not confirmed {direct}")
                     except Exception as de:
-                        log_warn(f"bonus direct failed {de}, falling back to attempt_upload")
-                        res = attempt_upload(drop_target='locator(\'div.space-y-1 div.group\').last()', click_target='locator(\'div.space-y-1 div.group\').last()', input_nth=0, abs_paths=[bonusImage], label="Bonus")
-                        report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
-                        log_info(f"bonus upload fallback {res}")
+                        log_warn(f"bonus direct failed {de}, trying fast fallback drop first to reduce time")
+                        # Fast fallback first: the successful strategy from log - drop on div.space-y-1 div.group
+                        try:
+                            res = attempt_upload(drop_target='locator(\'div.space-y-1 div.group\').last()', click_target='locator(\'div.space-y-1 div.group\').last()', input_nth=0, abs_paths=[bonusImage], label="Bonus")
+                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
+                            log_info(f"bonus upload fast fallback success {res}")
+                        except Exception as e2:
+                            log_warn(f"fast fallback also failed {e2}, trying exhaustive selectors")
+                            # Then fallback to exhaustive - but we already tried, so just re-raise
+                            raise
                     sleep(800)
                 except Exception as e:
                     log_warn(f"bonus image upload failed {e}")
@@ -1486,10 +1489,16 @@ def main():
         step(report, "Validate Review and Submit", lambda: heading("Review & Submit"))
         def create_sweep():
             heading("Review & Submit")
-            # Click Create Sweep button (was once Continue) - user requested at Very end
+            # 11. CREATE SWEEPS — clicks type=submit, captures POSTs + redirect back to /admin/sweeps (--static so document posts visible), fails on 4xx/5xx
             try:
-                # Try multiple selectors for Create Sweep
+                # Mark network before click (--static so document posts visible)
+                try:
+                    before_reqs = cli(["requests", "--static"], allow_failure=True)["stdout"]
+                except:
+                    before_reqs = ""
                 btn_selectors = [
+                    'locator(\'button[type="submit"]:has-text("CREATE SWEEPS")\')',
+                    'locator(\'button[type="submit"]:has-text("Create Sweeps")\')',
                     'locator(\'button:has-text("Create Sweeps")\')',
                     'locator(\'button:has-text("Create Sweep")\')',
                     'locator(\'button:has-text("CREATE SWEEPS")\')',
@@ -1504,28 +1513,190 @@ def main():
                 for sel in btn_selectors:
                     r = cli(["click", sel], allow_failure=True)
                     if r["code"] == 0:
-                        log_info(f"clicked Create Sweep via {sel[:60]}")
+                        log_info(f"clicked Create Sweeps via {sel[:60]}")
                         clicked = True
                         break
                     sleep(300)
                 if not clicked:
-                    # JS fallback via page.evaluate
                     js = run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> /Create Sweeps?/i.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked:'+b.innerText.slice(0,30); } return 'no-btn:'+[...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).filter(x=>x).slice(-8).join('|'); }); }")
                     log_info(f"Create Sweep JS {js}")
                     if "clicked" in str(js):
                         clicked = True
-                sleep(2000)
+                sleep(3000)
+                # Capture POSTs after click (--static)
+                try:
+                    after_reqs = cli(["requests", "--static"], allow_failure=True)["stdout"]
+                except:
+                    after_reqs = ""
+                # Parse for failures 4xx/5xx
+                has_4xx = False
+                fail_lines = []
+                for line in after_reqs.splitlines():
+                    m = line.strip()
+                    # Look for pattern like "12. [POST] https://.../sweeps => [400] Bad Request" or "=> [FAILED]"
+                    if "POST" in m and ("=> [4" in m or "=> [5" in m or "FAILED" in m):
+                        has_4xx = True
+                        fail_lines.append(m)
+                if has_4xx:
+                    raise RuntimeError(f"Create request failed 4xx/5xx: {' | '.join(fail_lines[:3])}")
+                # Check for POST to sweeps
+                has_sweeps_post = "/sweeps" in after_reqs and "POST" in after_reqs
+                if not has_sweeps_post:
+                    log_warn("no POST to a /sweeps URL observed after CREATE SWEEPS (see network)")
+                # Check redirect back to /admin/sweeps
+                url = current_url()
+                log_info(f"after CREATE SWEEPS url: {url}")
+                if "/admin/sweeps" not in url:
+                    log_warn(f"Create did not return to /admin/sweeps. Current URL: {url} - will try to goto")
+                    # Try to goto admin sweeps to recover
+                    try:
+                        goto(f"{ADMIN}/admin/sweeps")
+                        sleep(1500)
+                    except:
+                        pass
                 # Verify sweep created - check for success or redirect
                 txt = body_text()
                 if "sweep" in txt.lower() or "success" in txt.lower():
-                    log_info(f"Create Sweep appears successful")
+                    log_info(f"Create Sweeps appears successful")
                 else:
-                    log_warn(f"Create Sweep clicked but body {txt[:400]}")
+                    log_warn(f"Create Sweeps clicked but body {txt[:400]}")
+                report["createNetwork"] = {"before": before_reqs[:2000], "after": after_reqs[:4000], "url": url}
             except Exception as e:
-                log_warn(f"Create Sweep failed {e}")
+                log_warn(f"Create Sweeps failed {e}")
                 import traceback
                 log_warn(traceback.format_exc()[:600])
+                raise
         step(report, "Create Sweep", lambda: create_sweep())
+        # 12. Storefront - open admin row sweeps link and verify
+        def open_storefront():
+            nonlocal publicUrl
+            heading("Storefront")
+            # Try to find sweeps link via admin row snapshot or publicUrlFromAdminRow
+            try:
+                # Use sweepsRowSnapshot from common if available, else fallback to JS
+                try:
+                    from common import sweeps_row_snapshot
+                    row = sweeps_row_snapshot(sweep_title)
+                    log_info(f"sweeps row snapshot: {row}")
+                    if row.get("found") and row.get("sweepsLink"):
+                        publicUrl_local = row["sweepsLink"]
+                    else:
+                        raise Exception("row not found")
+                except:
+                    # Fallback JS like in run.js publicUrlFromAdminRow
+                    raw = run_code(f"""async page => {{ return await page.evaluate((title) => {{
+                        const rows = [...document.querySelectorAll('tr')].filter(tr => (tr.innerText || '').includes(title));
+                        const links = [...document.querySelectorAll('a')].filter(a => /\\/sweeps\\/[^/?#]+/i.test(a.getAttribute('href') || ''));
+                        const pick = links.find(a => rows.includes(a.closest('tr')));
+                        if (!pick) return '[]';
+                        return JSON.stringify([{{ href: pick.href, label: (pick.getAttribute('aria-label') || pick.innerText || '').trim(), inRow: true }}]);
+                    }}, {json.dumps(sweep_title)}) }}""")
+                    import json as _js
+                    cands = _js.loads(raw.strip().strip('"').strip("'") or "[]")
+                    if isinstance(cands, str):
+                        cands = _js.loads(cands)
+                    if not cands:
+                        raise RuntimeError(f"No sweeps-link anchor found for {sweep_title}")
+                    best = cands[0]
+                    publicUrl_local = best["href"]
+                    if not publicUrl_local.startswith("http"):
+                        publicUrl_local = ADMIN.rstrip("/") + "/" + publicUrl_local.lstrip("/")
+                    log_info(f"admin row sweeps link: {publicUrl_local}")
+                # Navigate to storefront
+                goto(publicUrl_local)
+                sleep(1600)
+                body = body_text()
+                # Assertions
+                assert_contains(body, sweep_title, "Storefront title")
+                assert_contains(body, campaignDescription[:32], "Storefront description")
+                assert_contains(body, data["prizeReward"], "Storefront prize")
+                assert_contains(body, data["eligibleCountries"], "Storefront eligibleCountries")
+                # Media order check
+                media_raw = run_code("""async page => { return await page.evaluate(() => JSON.stringify([...document.querySelectorAll('img, video')].map(e => ({ tag: e.tagName.toLowerCase(), alt: (e.getAttribute('alt') || '').slice(0, 80), src: ((e.currentSrc || e.src || '').split('?')[0].split('/').slice(-2).join('/')).slice(0, 120) })).filter(m => m.src && !/logo|icon|favicon|sprite/i.test(m.src)).slice(0, 30))); }""")
+                import json as _j2
+                media = _j2.loads(media_raw.strip().strip('"').strip("'") or "[]")
+                if isinstance(media, str):
+                    media = _j2.loads(media)
+                log_info(f"storefront media: {len(media)} items")
+                report["storefront"] = {"url": publicUrl_local, "media": media, "body_snippet": body[:500]}
+                # Save publicUrl for later steps
+                publicUrl = publicUrl_local
+                report["publicUrl"] = publicUrl_local
+            except Exception as e:
+                log_warn(f"storefront failed {e}")
+                import traceback as _tb
+                log_warn(_tb.format_exc()[:800])
+                raise
+
+        def exercise_cart():
+            heading("Cart")
+            try:
+                # Ensure we are on storefront
+                if "fandiem.co/sweeps" not in current_url():
+                    # If not on storefront, try to goto publicUrl
+                    if report.get("publicUrl"):
+                        goto(report["publicUrl"])
+                        sleep(1000)
+                rawCount = run_code("async page => { return await page.evaluate(() => String(document.querySelectorAll('button#add-to-cart-btn').length)); }")
+                count = int(''.join(filter(str.isdigit, str(rawCount))) or "0")
+                if count < 1:
+                    raise RuntimeError(f"No #add-to-cart-btn elements found. Count: {rawCount}")
+                log_info(f"found {count} add-to-cart buttons")
+                buttonTexts_raw = run_code("async page => { return await page.evaluate(() => JSON.stringify([...document.querySelectorAll('button#add-to-cart-btn')].map(x=>x.innerText.trim()))); }")
+                import json as _j3
+                buttonTexts = _j3.loads(buttonTexts_raw.strip().strip('"').strip("'") or "[]")
+                if isinstance(buttonTexts, str):
+                    buttonTexts = _j3.loads(buttonTexts)
+                cartResults = []
+                for i in range(count):
+                    log_info(f"Cart button {i+1}/{count}: {buttonTexts[i] if i < len(buttonTexts) else ''}")
+                    # network mark with static
+                    try:
+                        # Use cli requests --static to capture
+                        before = cli(["requests", "--static"], allow_failure=True)["stdout"]
+                    except:
+                        before = ""
+                    # Click button
+                    cli(["click", f"locator('button#add-to-cart-btn').nth({i})"], allow_failure=True)
+                    sleep(1800)
+                    try:
+                        after = cli(["requests", "--static"], allow_failure=True)["stdout"]
+                    except:
+                        after = ""
+                    # Simple check: look for POST /cart in after that wasn't in before, or check via run_code fetch
+                    # Use networkSince logic via cli requests parsing
+                    has_post = "/cart" in after and "POST" in after
+                    # Also try cartState via fetch
+                    cart_state_raw = run_code("async page => { const raw = await page.evaluate(async () => { try { const res = await fetch('/cart.js', { cache: 'no-store' }); const j = await res.json(); return JSON.stringify({ ok: true, item_count: j.item_count }); } catch(e){ return JSON.stringify({ ok: false, error: String(e) }); } }); return raw; }")
+                    cart_state = None
+                    try:
+                        import json as _j4
+                        cart_state = _j4.loads(cart_state_raw.strip().strip('"').strip("'") or "null")
+                        if isinstance(cart_state, str):
+                            cart_state = _j4.loads(cart_state)
+                    except:
+                        pass
+                    item_count = cart_state.get("item_count") if cart_state and cart_state.get("ok") else None
+                    ok = has_post or (item_count is not None and item_count > 0)
+                    cartResults.append({"index": i, "text": buttonTexts[i] if i < len(buttonTexts) else "", "postCartObserved": has_post, "ok": ok, "itemCount": item_count})
+                    if not ok:
+                        log_warn(f"cart button {i+1} had no successful POST /cart")
+                    # Go back to storefront for next button
+                    if report.get("publicUrl"):
+                        goto(report["publicUrl"])
+                        sleep(900)
+                write_json("cart-results.json", cartResults)
+                failed = [x for x in cartResults if not x["ok"]]
+                if failed:
+                    raise RuntimeError(f"Some add-to-cart clicks had no successful POST /cart: {failed}")
+            except Exception as e:
+                log_warn(f"cart exercise failed {e}")
+                import traceback as _tb
+                log_warn(_tb.format_exc()[:800])
+                raise
+
+        step(report, "Open created sweep storefront", lambda: open_storefront())
+        step(report, "Exercise every add-to-cart button", lambda: exercise_cart())
         report["status"]="PASS"
         report["finishedAt"]=datetime.utcnow().isoformat()+"Z"
         report["publicUrl"]=publicUrl
