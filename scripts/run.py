@@ -1286,6 +1286,24 @@ def main():
                     log_info(f"bonus file inputs before {inputs}")
                     reveal_file_inputs()
                     sleep(800)
+                    # --- Drag & Drop for your exact HTML: div.group with hidden input class=hidden min-h-39 - try drop on container first (don't change rest) ---
+                    try:
+                        log_info("bonus: attempting Drag & Drop on div.group (your HTML) before setInputFiles")
+                        try:
+                            run_code("async page => { return await page.evaluate(() => { const z=document.querySelector('div.group'); if(z){z.scrollIntoView({block:'center',behavior:'instant'}); return 'scrolled';} return 'no-zone';}); }")
+                            sleep(400)
+                        except: pass
+                        drop_files('locator(\'div.group\').last()', [bonusImage])
+                        sleep(1500)
+                        chk_drop = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.group input'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.group img, div.min-h-39 img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-drop';}); }")
+                        log_info(f"bonus drag & drop verify {chk_drop}")
+                        if "files:" in str(chk_drop) or "img:" in str(chk_drop) or "zone-changed" in str(chk_drop):
+                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "drag-drop:div.group"}
+                            log_info("bonus drag & drop succeeded on div.group")
+                        else:
+                            log_warn(f"bonus drag & drop not confirmed {chk_drop}")
+                    except Exception as e_drop:
+                        log_warn(f"bonus drag & drop failed {e_drop}")
                     # Direct fast-path: Bonus image input same structure as your HTML - <div class=\"group relative flex... min-h-39\"><input class=\"hidden\" type=file> - handle like Campaign Gallery
                     direct_ok = False
                     try:
