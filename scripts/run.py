@@ -1840,10 +1840,34 @@ def main():
                     cartResults.append({"index": i, "text": buttonTexts[i] if i < len(buttonTexts) else "", "postCartObserved": has_post, "ok": ok, "itemCount": item_count})
                     if not ok:
                         log_warn(f"cart button {i+1} had no successful POST /cart")
-                    # Go back to storefront for next button
-                    if report.get("publicUrl"):
-                        goto(report["publicUrl"])
-                        sleep(900)
+                    # Close cart drawer by clicking outside instead of reload (user request)
+                    try:
+                        # Random click outside drawer — top-left corner (20,20) is always outside the right-side drawer
+                        run_code("async page => { try { await page.mouse.click(20, 20); return 'clicked-20-20'; } catch(e){ return 'fail:'+String(e).slice(0,100);} }")
+                        sleep(600)
+                        # Also try a second random outside spot for reliability (50,150)
+                        try:
+                            run_code("async page => { await page.mouse.click(50, 150); return 'clicked-50-150'; }")
+                            sleep(300)
+                        except: pass
+                        # Fallback: click body overlay/backdrop if drawer uses it
+                        try:
+                            cli(["click", "locator('body').first()"], allow_failure=True)
+                            sleep(300)
+                        except: pass
+                        # Press Escape as extra safety to dismiss drawer
+                        try:
+                            cli(["press", "Escape"], allow_failure=True)
+                            sleep(500)
+                        except: pass
+                        log_info(f"Closed cart drawer via outside click for button {i+1}")
+                    except Exception as _ce:
+                        log_warn(f"outside click failed {_ce}, fallback to goto")
+                        try:
+                            if report.get("publicUrl"):
+                                goto(report["publicUrl"])
+                                sleep(900)
+                        except: pass
                 write_json("cart-results.json", cartResults)
                 failed = [x for x in cartResults if not x["ok"]]
                 if failed:
