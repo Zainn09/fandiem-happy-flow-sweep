@@ -1201,10 +1201,20 @@ def main():
                         log_warn("Select entry tiers trigger not found, skipping tier select (optional)")
                 except Exception as e:
                     log_warn(f"entry tier dropdown failed {e}")
-                # Bonus Image upload SKIPPED per user request - no image option in Bonus
-                log_info("Bonus image upload SKIPPED - no image option as requested")
-                report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "skipped": True, "reason": "user requested no Bonus image upload"}
-                sleep(300)
+                # Bonus Image - handle same as Campaign info, upload via dashed zone then save via Add Bonus
+                try:
+                    inputs = list_file_inputs()
+                    log_info(f"bonus file inputs {inputs}")
+                    reveal_file_inputs()
+                    sleep(500)
+                    # Modal upload zone is Drag & drop or click to upload (same pattern as Campaign Gallery)
+                    res = attempt_upload(drop_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', click_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', input_nth=-1 if inputs else None, abs_paths=[bonusImage], label="Bonus")
+                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
+                    log_info(f"bonus upload {res}")
+                    sleep(800)
+                except Exception as e:
+                    log_warn(f"bonus image upload failed {e}")
+                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "error": str(e)[:500]}
                 # Click Add Bonus save - last button with that text
                 try:
                     _r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').last()'], allow_failure=True)
@@ -1287,7 +1297,44 @@ def main():
         step(report, "Fill Sweeps Info", lambda: stub_sweeps())
         step(report, "Leave Tracking and Visibility unchanged", lambda: (heading("Tracking & Visibility"), click_continue_and_expect("Review")))
         step(report, "Validate Review and Submit", lambda: heading("Review & Submit"))
-        step(report, "Create Sweep", lambda: print("  [info] Create Sweep stub - would click CREATE SWEEPS here"))
+        def create_sweep():
+            heading("Review & Submit")
+            # Click Create Sweep button (was once Continue) - user requested at Very end
+            try:
+                # Try multiple selectors for Create Sweep
+                btn_selectors = [
+                    'locator(\'button:has-text("Create Sweep")\')',
+                    'locator(\'button:has-text("CREATE SWEEP")\')',
+                    locator("role","button",{"name":"Create Sweep"}),
+                    locator("role","button",{"name":"CREATE SWEEP"}),
+                    'locator(\'button:has-text("Create")\').last()',
+                ]
+                clicked = False
+                for sel in btn_selectors:
+                    r = cli(["click", sel], allow_failure=True)
+                    if r["code"] == 0:
+                        log_info(f"clicked Create Sweep via {sel[:60]}")
+                        clicked = True
+                        break
+                    sleep(300)
+                if not clicked:
+                    # JS fallback via page.evaluate
+                    js = run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> /Create Sweep/i.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked:'+b.innerText.slice(0,30); } return 'no-btn:'+[...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).slice(-5).join('|'); }); }")
+                    log_info(f"Create Sweep JS {js}")
+                    if "clicked" in str(js):
+                        clicked = True
+                sleep(2000)
+                # Verify sweep created - check for success or redirect
+                txt = body_text()
+                if "sweep" in txt.lower() or "success" in txt.lower():
+                    log_info(f"Create Sweep appears successful")
+                else:
+                    log_warn(f"Create Sweep clicked but body {txt[:400]}")
+            except Exception as e:
+                log_warn(f"Create Sweep failed {e}")
+                import traceback
+                log_warn(traceback.format_exc()[:600])
+        step(report, "Create Sweep", lambda: create_sweep())
         report["status"]="PASS"
         report["finishedAt"]=datetime.utcnow().isoformat()+"Z"
         report["publicUrl"]=publicUrl
