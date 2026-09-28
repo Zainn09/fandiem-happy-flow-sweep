@@ -256,7 +256,7 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
             end=time.time()+12
             while time.time()<end:
                 try:
-                    r = run_code("async page => { return await page.evaluate(() => { const ins=[...document.querySelectorAll('input[type=\"file\"]')]; const last=ins[ins.length-1]; if(last && last.files && last.files.length>0) return 'files:'+last.files[0].name; const imgs=[...document.querySelectorAll('div.group img, div.space-y-1 img, div.flex.flex-col.gap-1 img')]; if(imgs.length>0 && imgs[0].src) return 'img:'+imgs[0].src.slice(-20); const zone=document.querySelector('div.group'); if(zone && zone.innerText && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); const body=document.body.innerText||''; if(body.includes('qa-bonus')||body.includes('Bonus')) return 'body-hint:'+body.slice(0,80); return 'no-bonus'; }); }")
+                    r = run_code("async page => { return await page.evaluate(() => { const ins=[...document.querySelectorAll('input[type=file]')]; const last=ins[ins.length-1]; if(last && last.files && last.files.length>0) return 'files:'+last.files[0].name; const imgs=[...document.querySelectorAll('div.group img, div.space-y-1 img, div.flex.flex-col.gap-1 img')]; if(imgs.length>0 && imgs[0].src) return 'img:'+imgs[0].src.slice(-20); const zone=document.querySelector('div.group'); if(zone && zone.innerText && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); const body=document.body.innerText||''; if(body.includes('qa-bonus')||body.includes('Bonus')) return 'body-hint:'+body.slice(0,80); return 'no-bonus'; }); }")
                     rs=str(r)
                     if "files:" in rs or "img:" in rs or "zone-changed" in rs:
                         log_info(f"{label}: {tag} ok files={names} via bonus check {rs[:80]}")
@@ -323,7 +323,7 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
         inputs = list_file_inputs()
         log_info(f"{label}: file inputs before setInputFiles: {json.dumps([{'idx':x['index'],'multiple':x.get('multiple'),'accept':(x.get('accept') or '')[:30]} for x in inputs])}")
         try:
-            cnt=int(run_code("async page => String(await page.locator('input[type=\"file\"]').count())").strip() or "0")
+            cnt=int(run_code("async page => String(await page.locator('input[type=file]').count())").strip() or "0")
             log_info(f"{label}: locator count={cnt}, eval found {len(inputs)}")
             if cnt>0 and len(inputs)==0:
                 inputs=[{"index":i} for i in range(cnt)]
@@ -1254,20 +1254,55 @@ def main():
                         log_warn("Select entry tiers trigger not found, skipping tier select (optional)")
                 except Exception as e:
                     log_warn(f"entry tier dropdown failed {e}")
-                # Bonus Image - handle same as Campaign info, upload via dashed zone then save via Add Bonus
+                # Bonus Image - handle same as Campaign Gallery precisely: scroll zone, reveal, direct setInputFiles then fallback
                 try:
+                    # Ensure zone visible and clicked (opens file picker focus) like Campaign Gallery
+                    try:
+                        run_code("async page => { return await page.evaluate(() => { const zone=document.querySelector('div.space-y-1 div.group')||document.querySelector('div.flex.flex-col.gap-1 div.group')||[...document.querySelectorAll('div')].find(d=> (d.innerText||'').includes('Drag & drop or click to upload')); if(zone){ zone.scrollIntoView({block:'center',behavior:'instant'}); zone.click(); return 'scrolled-clicked:'+ (zone.className||'').slice(0,40); } return 'no-zone'; }); }")
+                        sleep(500)
+                        cli(["click", 'locator(\'div.space-y-1 div.group\').last()'], allow_failure=True)
+                        sleep(300)
+                    except: pass
                     inputs = list_file_inputs()
-                    log_info(f"bonus file inputs {inputs}")
+                    log_info(f"bonus file inputs before {inputs}")
                     reveal_file_inputs()
-                    sleep(500)
-                    # Modal upload zone is Drag & drop or click to upload (same pattern as Campaign Gallery)
-                    res = attempt_upload(drop_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', click_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', input_nth=-1 if inputs else None, abs_paths=[bonusImage], label="Bonus")
-                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
-                    log_info(f"bonus upload {res}")
+                    sleep(800)
+                    # Direct fast-path: setInputFiles on the Bonus modal's specific input (div.space-y-1) like Campaign's div.space-y-2
+                    direct_ok = False
+                    try:
+                        _bpaths = json.dumps([bonusImage])
+                        direct = run_code("async page => { try { const sel='div.space-y-1 input[type=file]'; const cnt=await page.locator(sel).count(); if(cnt===0) return 'no-input-'+cnt; const loc=page.locator(sel).first(); await loc.evaluate(el=>{el.style.display='block';el.style.visibility='visible';el.style.opacity='1';el.style.width='100px';el.style.height='20px';el.removeAttribute('hidden');el.classList.remove('hidden');}); await loc.setInputFiles(" + _bpaths + "); const has=await page.locator(sel).first().evaluate(el=> el.files?el.files.length:0); return 'direct-ok:'+has; } catch(e){ return 'direct-fail:'+String(e.message||e).slice(0,200); } }")
+                        log_info(f"bonus direct setInputFiles result {direct}")
+                        if "direct-ok:1" in str(direct):
+                            sleep(1200)
+                            chk = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.space-y-1 input[type=file]')||document.querySelector('div.flex.flex-col.gap-1 input[type=file]')||document.querySelector('div.group input[type=file]'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.space-y-1 img, div.flex.flex-col.gap-1 img, div.group img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.space-y-1 div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-preview'; }); }")
+                            log_info(f"bonus direct verify {chk}")
+                            if "files:" in str(chk) or "img:" in str(chk) or "zone-changed" in str(chk):
+                                report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "direct-setInputFiles:"+str(chk)[:60]}
+                                log_info(f"bonus upload direct success {chk}")
+                                direct_ok = True
+                            else:
+                                log_warn(f"bonus direct verify not yet {chk}, will poll 3s")
+                                for _ in range(6):
+                                    sleep(500)
+                                    chk2 = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.space-y-1 input[type=file]'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.space-y-1 img'); return img?'img': 'no'; }); }")
+                                    if "files:" in str(chk2) or "img" in str(chk2):
+                                        report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "direct-setInputFiles-poll"}
+                                        direct_ok = True
+                                        break
+                        if not direct_ok:
+                            raise RuntimeError(f"direct not confirmed {direct}")
+                    except Exception as de:
+                        log_warn(f"bonus direct failed {de}, falling back to attempt_upload")
+                        res = attempt_upload(drop_target='locator(\'div.space-y-1 div.group\').last()', click_target='locator(\'div.space-y-1 div.group\').last()', input_nth=0, abs_paths=[bonusImage], label="Bonus")
+                        report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
+                        log_info(f"bonus upload fallback {res}")
                     sleep(800)
                 except Exception as e:
                     log_warn(f"bonus image upload failed {e}")
-                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "error": str(e)[:500]}
+                    import traceback as _tb
+                    log_warn(_tb.format_exc()[:900])
+                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "error": str(e)[:800]}
                 # Click Add Bonus save - last button with that text
                 try:
                     _r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').last()'], allow_failure=True)
