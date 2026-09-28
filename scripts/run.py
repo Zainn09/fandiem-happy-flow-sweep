@@ -149,7 +149,7 @@ def click_continue_and_expect(expected):
         cli(["press", "Escape"], allow_failure=True); sleep(300)
     except: pass
     try:
-        run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
+        run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); return 'scrolled:'+b.innerText.slice(0,30);} return 'no-btn'; }); }"); sleep(400)
     except: pass
     targets = [
         'locator(\'button[data-slot="button"][data-variant="gradient"][data-size="lg"]:has-text("CONTINUE")\')',
@@ -181,7 +181,7 @@ def click_continue_and_expect(expected):
     # For Review, also accept "Review & Submit" or "Create Sweep" as success
     expects = [expected]
     if expected.lower() == "review":
-        expects = ["Review", "Review & Submit", "Create Sweep", "CREATE SWEEP"]
+        expects = ["Review", "Review & Submit", "Create Sweep", "Create Sweeps", "CREATE SWEEP", "CREATE SWEEPS"]
     ok=False
     for exp in expects:
         if wait_for_text(exp, 8000):
@@ -194,7 +194,7 @@ def click_continue_and_expect(expected):
         log_warn(f"Did not reach {expected}, retry. Errors: {safe_join(errs,' | ') or 'none'}. Body snippet: {body_text()[:400]!r}")
         try:
             # Scroll CONTINUE into view and retry
-            run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); return 'scrolled:'+b.innerText.slice(0,30); } return 'no-btn'; }")
+            run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); return 'scrolled:'+b.innerText.slice(0,30);} return 'no-btn'; }); }")
             sleep(500)
             cli(["click", targets[0]], allow_failure=True); sleep(1000)
             js2=run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ if(b.disabled) return 'disabled:'+b.innerText; b.click(); return 'clicked-retry:'+b.innerText; } const all=[...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).filter(x=>x).slice(-8).join('|'); return 'no-btn buttons:'+all; }); }")
@@ -1391,10 +1391,14 @@ def main():
             try:
                 # Try multiple selectors for Create Sweep
                 btn_selectors = [
+                    'locator(\'button:has-text("Create Sweeps")\')',
                     'locator(\'button:has-text("Create Sweep")\')',
+                    'locator(\'button:has-text("CREATE SWEEPS")\')',
                     'locator(\'button:has-text("CREATE SWEEP")\')',
+                    'locator(\'button[data-variant="gradient"][type="submit"]:has-text("Create")\')',
+                    locator("role","button",{"name":"Create Sweeps"}),
                     locator("role","button",{"name":"Create Sweep"}),
-                    locator("role","button",{"name":"CREATE SWEEP"}),
+                    locator("role","button",{"name":"CREATE SWEEPS"}),
                     'locator(\'button:has-text("Create")\').last()',
                 ]
                 clicked = False
@@ -1407,7 +1411,7 @@ def main():
                     sleep(300)
                 if not clicked:
                     # JS fallback via page.evaluate
-                    js = run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> /Create Sweep/i.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked:'+b.innerText.slice(0,30); } return 'no-btn:'+[...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).slice(-5).join('|'); }); }")
+                    js = run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> /Create Sweeps?/i.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked:'+b.innerText.slice(0,30); } return 'no-btn:'+[...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).filter(x=>x).slice(-8).join('|'); }); }")
                     log_info(f"Create Sweep JS {js}")
                     if "clicked" in str(js):
                         clicked = True
