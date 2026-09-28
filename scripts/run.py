@@ -73,6 +73,14 @@ def ensure_playwright_attached():
     raise RuntimeError("Could not attach Playwright to Chrome within 60s. Click Allow & select in the Playwright extension tab, or set extensionToken in config.json")
 
 # ---------- data ----------
+# Continuation mode: skip creation and continue from onwards (storefront/cart onwards)
+# Usage: python scripts/run.py --continue  or  python scripts/run.py --onwards  or  python scripts/run.py --continue=storefront
+#        SWEEP_TITLE="Fandiem-20250928-005" python scripts/run.py --continue
+is_continue_mode = any(a in ("--continue","--onwards","--resume","--from-onwards") or a.startswith("--continue=") or a.startswith("--from=") or a.startswith("--resume") for a in sys.argv)
+continue_from = "storefront"  # default onwards point = storefront/cart (after sweep created)
+for a in sys.argv:
+    if a.startswith("--continue="): continue_from = a.split("=",1)[1].strip().lower()
+    elif a.startswith("--from="): continue_from = a.split("=",1)[1].strip().lower()
 is_dry_run = "--dry-run" in sys.argv
 def preview_title():
     if os.environ.get("SWEEP_TITLE","").strip(): return os.environ["SWEEP_TITLE"].strip()+" (preview)"
@@ -82,7 +90,27 @@ def preview_title():
     try: n=int(json.loads((resultsDir / f"run-counter-{yyyymmdd}.json").read_text(encoding="utf-8")).get("count",0))
     except: pass
     return f"{config['sweepTitlePrefix']}-{yyyymmdd}-{n+1:03d} (preview)"
-sweep_title = preview_title() if is_dry_run else build_sweep_title()
+def resolve_continue_title(fallback):
+    # Priority: SWEEP_TITLE env > results/report.json > results/latest sweepTitle > fallback
+    env_title = os.environ.get("SWEEP_TITLE","").strip()
+    if env_title:
+        log_info(f"Continue mode: using SWEEP_TITLE env: {env_title}")
+        return env_title
+    # Try results/report.json
+    for cand in [resultsDir / "report.json", ROOT / "results" / "report.json", pathlib.Path("results/report.json")]:
+        try:
+            if cand.exists():
+                j = json.loads(cand.read_text(encoding="utf-8"))
+                t = (j.get("sweepTitle") or j.get("testData",{}).get("sweepTitle") or "").strip()
+                if t:
+                    log_info(f"Continue mode: using sweepTitle from {cand}: {t}")
+                    return t
+        except: pass
+    log_warn(f"Continue mode: no prior report found, using fallback title {fallback} (pass SWEEP_TITLE env to override)")
+    return fallback
+
+_raw_title = preview_title() if is_dry_run else build_sweep_title()
+sweep_title = resolve_continue_title(_raw_title) if is_continue_mode else _raw_title
 stamp = re.sub(f"^{re.escape(config['sweepTitlePrefix'])}-","",sweep_title).replace("-","")
 ADMIN = config["adminBaseUrl"].rstrip("/")
 PUBLIC = config["publicBaseUrl"].rstrip("/")
@@ -876,13 +904,35 @@ def main():
         print(f"Bonus: {bonusImage}")
         print("DRY RUN OK — Python assets resolve, config parses, title builds.")
         return
-    report={"startedAt":datetime.utcnow().isoformat()+"Z","sweepTitle":sweep_title,"status":"RUNNING","steps":[],"testData":{**data,"campaignDescription":campaignDescription},"selections":{},"media":{}}
+    report={"startedAt":datetime.utcnow().isoformat()+"Z","sweepTitle":sweep_title,"status":"RUNNING","steps":[],"testData":{**data,"campaignDescription":campaignDescription},"selections":{},"media":{},"continueMode": is_continue_mode, "continueFrom": continue_from if is_continue_mode else None}
     publicUrl=""
     try:
-        ensure_playwright_attached()
-        step(report, "Open sweep create via Campaigns Sweeps", lambda: open_sweep_create())
-        step(report, "Fill Campaign Info with media", lambda: fill_campaign_info(report))
-        step(report, "Complete Partners", lambda: (fill_partners(report), click_continue_and_expect("Promotion")))
+        if is_continue_mode:
+            # Sweep created Successfully CONFIRMED — continue onwards (skip full creation)
+            print(f"\n=== CONTINUE MODE ONWARDS ===")
+            print(f"Sweep created Successfully CONFIRMED — continuing from '{continue_from}' with title: {sweep_title}")
+            print(f"Skipping full Sweep creation from start. Use without --continue to create fresh Sweep.\n")
+            ensure_playwright_attached()
+            # For default onwards (storefront), we still need to be on admin to find sweeps link
+            # Jump directly to storefront/cart unless continue_from explicitly says otherwise
+            if continue_from in ("create","createsweeps","review","sweepsinfo","sweeps","tracking","visibility"):
+                print(f"[info] Continuing from {continue_from} — will run creation onwards steps")
+                # Go to admin sweeps list first so sweeps_row_snapshot can find the sweep
+                try:
+                    goto(f"{ADMIN}/admin/sweeps"); sleep(1500)
+                except: pass
+            else:
+                # Default storefront onwards: ensure we are on admin list to locate sweep
+                try:
+                    goto(f"{ADMIN}/admin/sweeps"); sleep(1500)
+                except:
+                    ensure_playwright_attached()
+        else:
+            ensure_playwright_attached()
+            step(report, "Open sweep create via Campaigns Sweeps", lambda: open_sweep_create())
+        if not is_continue_mode:
+            step(report, "Fill Campaign Info with media", lambda: fill_campaign_info(report))
+            step(report, "Complete Partners", lambda: (fill_partners(report), click_continue_and_expect("Promotion")))
         # For remaining steps, we call Node's logic via python quickly or simplified - to keep Python file runnable we stub as PASS if not critical
         # Instead we try to run the same Node steps via Python wrappers for Promotion, Prize, etc. but simplified:
         def stub_promotion():
@@ -1428,13 +1478,6 @@ def main():
                 import traceback
                 log_warn(traceback.format_exc()[:500])
             click_continue_and_expect("Tracking")
-        step(report, "Create two Promotion Tabs", lambda: stub_promotion())
-        step(report, "Create Prize Detail", lambda: stub_prize())
-        step(report, "Add custom Entry Tier", lambda: stub_tier())
-        step(report, "Create Bonus with image", lambda: stub_bonus())
-        step(report, "Fill Sweeps Info", lambda: stub_sweeps())
-        step(report, "Leave Tracking and Visibility unchanged", lambda: (heading("Tracking & Visibility"), click_continue_and_expect("Review")))
-        step(report, "Validate Review and Submit", lambda: heading("Review & Submit"))
         def create_sweep():
             heading("Review & Submit")
             # 11. CREATE SWEEPS — clicks type=submit, captures POSTs + redirect back to /admin/sweeps (--static so document posts visible), fails on 4xx/5xx
@@ -1514,7 +1557,19 @@ def main():
                 import traceback
                 log_warn(traceback.format_exc()[:600])
                 raise
-        step(report, "Create Sweep", lambda: create_sweep())
+        if not is_continue_mode:
+            step(report, "Create two Promotion Tabs", lambda: stub_promotion())
+            step(report, "Create Prize Detail", lambda: stub_prize())
+            step(report, "Add custom Entry Tier", lambda: stub_tier())
+            step(report, "Create Bonus with image", lambda: stub_bonus())
+            step(report, "Fill Sweeps Info", lambda: stub_sweeps())
+            step(report, "Leave Tracking and Visibility unchanged", lambda: (heading("Tracking & Visibility"), click_continue_and_expect("Review")))
+            step(report, "Validate Review and Submit", lambda: heading("Review & Submit"))
+            step(report, "Create Sweep", lambda: create_sweep())
+        else:
+            print("\n[continue] Skipping Sweep creation steps (Campaign Info -> Create Sweep) - Sweep already CONFIRMED")
+            for _n in ["Open sweep create via Campaigns Sweeps","Fill Campaign Info with media","Complete Partners","Create two Promotion Tabs","Create Prize Detail","Add custom Entry Tier","Create Bonus with image","Fill Sweeps Info","Leave Tracking and Visibility unchanged","Validate Review and Submit","Create Sweep"]:
+                report["steps"].append({"name": _n, "status": "SKIPPED (continue onwards)", "durationMs": 0})
         # 12. Storefront - open admin row sweeps link and verify
         def open_storefront():
             nonlocal publicUrl
