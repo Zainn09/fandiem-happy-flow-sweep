@@ -592,186 +592,98 @@ def fill_campaign_info(report):
     report["media"]["typeCoverage"]=coverage
     report["media"]["itemsText"]=gallery_items_text()
     if not galleryOrder: raise RuntimeError(f"Media Gallery required but no file uploaded. Errors: {safe_join(capture_visible_errors(),' | ') or 'none'}")
-    # Description - fill as you did before (screenshot shows empty) then CONTINUE to Partners
+    # Description - robust fill via click + page.evaluate (user reported not clicking/entering)
     log_info(f"Filling description ({len(campaignDescription)} chars): {campaignDescription[:60]}")
-    # Debug: dump editors/plaeholder before fill (helps diagnose why empty)
+    # First ensure editor is scrolled into view and clicked to focus
     try:
-        dbg0 = run_code('async page => { const eds=[...document.querySelectorAll("[contenteditable=true]")]; const phs=[...document.querySelectorAll("[data-placeholder]")]; return JSON.stringify({eds: eds.map((e,i)=>({i, ph:e.getAttribute("data-placeholder")||"", txt:(e.innerText||"").slice(0,40), r:{w:Math.round(e.getBoundingClientRect().width),h:Math.round(e.getBoundingClientRect().height)}})), phs: phs.map(e=>({ph:e.getAttribute("data-placeholder"), tag:e.tagName, ce:e.getAttribute("contenteditable")}))}); }')
-        log_info(f"Before fill editors: {dbg0}")
-    except Exception as e:
-        log_warn(f"dbg before failed: {e}")
-    filled = False
-    # Method 1: JS execCommand on visible contenteditable (most reliable for TipTap) - try all editors
-    for mi in range(2):
+        # Use page.evaluate to find and click the last visible contenteditable (Description is near Continue)
+        run_code("async page => { return await page.evaluate(() => { const eds=[...document.querySelectorAll('[contenteditable=true]')]; let el=null; for(let i=eds.length-1;i>=0;i--){ const r=eds[i].getBoundingClientRect(); if(r.width>300 && r.height>80){ el=eds[i]; break; } } if(!el) el=eds[eds.length-1]; if(el){ el.scrollIntoView({block:'center'}); return 'found:'+el.tagName; } return 'no-el'; }); }")
+        sleep(500)
+        cli(["click", 'locator(\'[contenteditable="true"]\').last()'], allow_failure=True)
+        sleep(400)
+        # Also try clicking the placeholder p if editor not focused
         try:
-            js = run_code(f"""async page => {{
-                const val = {json.dumps(campaignDescription)};
-                // Find editor: prefer placeholder Describe, else any placeholder, else last visible contenteditable
-                let el = document.querySelector('[data-placeholder="Describe the experience in detail..."]')
-                       || document.querySelector('[data-placeholder*="Describe"]')
-                       || document.querySelector('[data-placeholder]');
-                if (el && el.getAttribute("contenteditable")!=="true") {{
-                    // placeholder may be on inner <p>, find closest contenteditable
-                    const ce = el.closest('[contenteditable="true"]') || el.querySelector('[contenteditable="true"]') || el;
-                    if (ce) el = ce;
-                }}
-                if (!el || el.getAttribute("contenteditable")!=="true") {{
-                    const eds=[...document.querySelectorAll('[contenteditable="true"]')];
-                    // choose last visible (Description is at bottom near Continue)
-                    for (let i=eds.length-1;i>=0;i--) {{
-                        const r=eds[i].getBoundingClientRect();
-                        if (r.width>300 && r.height>80) {{ el=eds[i]; break; }}
-                    }}
-                    if (!el && eds.length) el=eds[eds.length-1];
-                }}
-                if (!el) return JSON.stringify({{noEl:true, eds:[...document.querySelectorAll('[contenteditable="true"]')].length}});
-                el.scrollIntoView({{block:'center'}});
-                await new Promise(r=>setTimeout(r,500));
-                el.focus();
-                await new Promise(r=>setTimeout(r,300));
-                // Clear then insert
-                try {{ document.execCommand('selectAll', false, null); }} catch(_e) {{}}
-                await new Promise(r=>setTimeout(r,150));
-                let ok=false;
-                try {{ ok=document.execCommand('insertText', false, val); }} catch(_e) {{}}
-                if (!ok) {{
-                    // ProseMirror fallback: set via innerHTML then mark
-                    try {{
-                        el.innerHTML='<p></p>';
-                        const p=el.querySelector('p');
-                        if (p) p.textContent=val; else el.textContent=val;
-                        // Trigger ProseMirror update
-                        const sel=window.getSelection(); if (sel) {{ const range=document.createRange(); range.selectNodeContents(el); sel.removeAllRanges(); sel.addRange(range); }}
-                    }} catch(_e) {{ el.innerText=val; }}
-                }}
-                el.dispatchEvent(new InputEvent('beforeinput', {{bubbles:true, data:val, inputType:'insertText'}}));
-                el.dispatchEvent(new Event('input', {{bubbles:true}}));
-                el.dispatchEvent(new Event('change', {{bubbles:true}}));
-                el.dispatchEvent(new KeyboardEvent('keyup', {{bubbles:true}}));
-                await new Promise(r=>setTimeout(r,700));
-                const txt=(el.innerText||el.textContent||"").trim();
-                const bodyHas=document.body.innerText.includes(val.slice(0,20));
-                return JSON.stringify({{ok: txt.slice(0,60), len: txt.length, bodyHas}});
-            }}""")
-            log_info(f"Description JS attempt {mi+1}: {js}")
-            try:
-                j=json.loads(str(js).strip().strip('"').strip("'")) if js else {}
-                if isinstance(j, dict) and j.get("len",0) > 10:
-                    filled=True; break
-                if isinstance(j, str) and "len" in j:
-                    # fallback string parse
-                    import re as _re
-                    m=_re.search(r'"len":\s*(\d+)', js)
-                    if m and int(m.group(1))>10: filled=True; break
-            except: pass
-            if "ok" in str(js).lower() and "len" in str(js):
-                # if returned ok string, consider filled if length >5
-                try:
-                    import re as _re
-                    mm=_re.search(r"len[^0-9]*([0-9]+)", js)
-                    if mm and int(mm.group(1))>5: filled=True; break
-                except: pass
-            if filled: break
-        except Exception as e:
-            log_warn(f"JS attempt {mi+1} failed: {e}")
-        sleep(800)
-    if not filled:
-        # Method 2: cli fill on all candidate locators (as you did before)
-        for sel in [
-            'locator(\'[data-placeholder="Describe the experience in detail..."]\')',
-            'locator(\'[data-placeholder*="Describe"]\')',
-            'locator(\'[contenteditable="true"]\').last()',
-            'locator(\'[contenteditable="true"]\').first()',
-            'locator(\'div[contenteditable="true"]\').last()',
-        ]:
-            try:
-                r = cli(["fill", sel, campaignDescription], allow_failure=True)
-                if r["code"] == 0:
-                    log_info(f"Description filled via cli fill {sel[:60]}")
-                    filled = True; sleep(500); break
-            except Exception as e:
-                log_warn(f"cli fill {sel[:30]} failed: {e}")
-    if not filled:
-        # Method 3: click last editor then type sequentially (mimics user)
-        try:
-            cli(["click", 'locator(\'[contenteditable="true"]\').last()'], allow_failure=True); sleep(500)
-            # Ensure focused
-            run_code('async page => { const el=[...document.querySelectorAll("[contenteditable=true]")].pop(); if(el) el.focus(); return "focused"; }')
+            run_code("async page => { return await page.evaluate(() => { const el=[...document.querySelectorAll('[contenteditable=true]')].pop(); if(el) el.focus(); return 'focused'; }); }")
             sleep(300)
-            cli(["press", "Control+A"], allow_failure=True); sleep(200)
-            cli(["press", "Backspace"], allow_failure=True); sleep(200)
-            # type via playwright type (pressSequentially)
-            cli(["type", campaignDescription], allow_failure=True)
+        except: pass
+    except Exception as e:
+        log_warn(f"pre-click failed {e}")
+    # Now fill via multiple methods, prefer page.evaluate with val param
+    filled = False
+    val_json = json.dumps(campaignDescription)
+    # Method 1: page.evaluate with execCommand insertText (most reliable for TipTap)
+    try:
+        js1 = run_code('async page => { return await page.evaluate((val) => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); if(!el) return "no-el"; el.focus(); el.scrollIntoView({block:"center"}); document.execCommand("selectAll", false, null); const ok=document.execCommand("insertText", false, val); el.dispatchEvent(new Event("input",{bubbles:true})); el.dispatchEvent(new Event("change",{bubbles:true})); if(!(el.innerText||"").includes(val.slice(0,10))){ el.innerHTML="<p>"+val.replace(/</g,"&lt;")+"</p>"; el.dispatchEvent(new Event("input",{bubbles:true})); } return "filled:"+(el.innerText||"").trim().slice(0,50); }, ' + val_json + ') }')
+        log_info(f"Description fill via evaluate execCommand: {js1}")
+        if campaignDescription[:10].lower() in str(js1).lower():
             filled = True
-            log_info("Description filled via click+ControlA+type")
+    except Exception as e:
+        log_warn(f"evaluate fill failed {e}")
+    if not filled:
+        # Method 2: cli fill on contenteditable last (playwright fill handles contenteditable)
+        try:
+            r = cli(["fill", 'locator(\'[contenteditable="true"]\').last()', campaignDescription], allow_failure=True)
+            if r["code"] == 0:
+                log_info("Description filled via cli fill last()")
+                filled = True
+            else:
+                # Try placeholder locator
+                r2 = cli(["fill", 'locator(\'[data-placeholder="Describe the experience in detail..."]\')', campaignDescription], allow_failure=True)
+                if r2["code"] == 0:
+                    log_info("filled via placeholder locator")
+                    filled = True
+        except Exception as e:
+            log_warn(f"cli fill failed {e}")
+    if not filled:
+        # Method 3: click + type via keyboard
+        try:
+            cli(["click", 'locator(\'[contenteditable="true"]\').last()'], allow_failure=True)
+            sleep(300)
+            cli(["press", "Control+A"], allow_failure=True)
+            sleep(200)
+            cli(["press", "Backspace"], allow_failure=True)
+            sleep(200)
+            cli(["type", campaignDescription], allow_failure=True)
+            log_info("Description filled via click+type")
+            filled = True
             sleep(500)
         except Exception as e:
-            log_warn(f"click+type failed: {e}")
-    if not filled:
-        # Method 4: direct JS set innerText as last resort
-        try:
-            js2 = run_code(f"""async page => {{
-                const val={json.dumps(campaignDescription)};
-                const eds=[...document.querySelectorAll('[contenteditable="true"]')];
-                const el=eds[eds.length-1] || document.querySelector('[data-placeholder]');
-                if (!el) return 'no-el2';
-                el.scrollIntoView({{block:'center'}});
-                el.focus();
-                el.textContent=val;
-                el.innerText=val;
-                if (el.querySelector('p')) el.querySelector('p').textContent=val;
-                el.dispatchEvent(new Event('input',{{bubbles:true}}));
-                return 'set:'+(el.innerText||'').slice(0,40);
-            }}""")
-            log_info(f"Direct set fallback: {js2}")
-            filled=True
-        except Exception as e:
-            log_warn(f"direct set failed: {e}")
-    sleep(800)
-    # Poll - must fill description field BEFORE Continue as user requested
+            log_warn(f"click+type failed {e}")
+    # Verify filled before Continue - must actually enter description
     found = False
     for attempt in range(6):
         txt = body_text()
         try:
-            ed_txt = run_code('async page => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); return (el? (el.innerText||el.textContent||""):"").trim().slice(0,80); }')
+            ed_txt = run_code('async page => { return await page.evaluate(() => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); return (el? (el.innerText||el.textContent||""):"").trim().slice(0,80); }); }')
         except:
             ed_txt = ""
-        if campaignDescription[:20].lower() in txt.lower() or campaignDescription[:20].lower() in str(ed_txt).lower():
-            log_info(f"Description verified filled on attempt {attempt+1} (editor: {str(ed_txt)[:40]})")
+        if campaignDescription[:15].lower() in txt.lower() or campaignDescription[:15].lower() in str(ed_txt).lower():
+            log_info(f"Description verified on attempt {attempt+1} ed:{str(ed_txt)[:40]}")
             found = True
             break
-        log_info(f"Description not yet filled attempt {attempt+1}/6 body:{txt[:60]} editor:{str(ed_txt)[:40]}")
-        sleep(800)
+        log_info(f"Description not yet verified attempt {attempt+1}/6 body:{txt[:50]} ed:{str(ed_txt)[:40]}")
         if attempt == 2 and not found:
+            # Retry with innerHTML set
             try:
-                val_json = json.dumps(campaignDescription)
-                run_code('async page => { const val = ' + val_json + '; let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=\"true\"]")].pop(); if(el){ el.scrollIntoView({block:"center"}); el.focus(); document.execCommand("selectAll", false, null); document.execCommand("insertText", false, val); el.dispatchEvent(new Event("input",{bubbles:true})); return "retry:"+(el.innerText||"").slice(0,30); } return "no-el"; }')
+                run_code('async page => { return await page.evaluate((val) => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); if(el){ el.focus(); el.innerHTML="<p>"+val.replace(/</g,"&lt;")+"</p>"; el.dispatchEvent(new Event("input",{bubbles:true})); return "retry-innerHTML:"+(el.innerText||"").slice(0,30); } return "no-el"; }, ' + val_json + ') }')
                 sleep(600)
-            except Exception as e:
-                log_warn(f"retry fill failed {e}")
+            except: pass
+        sleep(700)
     if not found:
-        log_warn(f"Description not verified after retries - checking editor")
+        log_warn("Description not verified after retries, forcing check")
         try:
-            final_ed = run_code('async page => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); if(!el) return "no-el"; const txt=(el.innerText||el.textContent||"").trim(); return JSON.stringify({txt: txt.slice(0,80), len: txt.length}); }')
-            log_info(f"Final editor: {final_ed}")
-            if campaignDescription[:15].lower() in str(final_ed).lower():
-                log_info("Editor has text - proceeding")
-                found=True
+            final = run_code('async page => { return await page.evaluate(() => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); if(!el) return "no-el"; return JSON.stringify({txt:(el.innerText||"").slice(0,80), len:(el.innerText||"").length}); }); }')
+            log_info(f"Final editor check {final}")
+            if campaignDescription[:10].lower() in str(final).lower():
+                found = True
             else:
-                log_info("Editor empty - final set via innerHTML")
-                val_json2 = json.dumps(campaignDescription)
-                run_code('async page => { const val = ' + val_json2 + '; let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=\"true\"]")].pop(); if(el){ el.focus(); el.innerHTML="<p>"+val.replace(/</g,"&lt;")+"</p>"; el.dispatchEvent(new Event("input",{bubbles:true})); el.dispatchEvent(new Event("change",{bubbles:true})); return "set:"+(el.innerText||"").slice(0,30); } return "no-el2"; }')
-                sleep(600)
-                chk = run_code('async page => { let el=document.querySelector(".tiptap")||[...document.querySelectorAll("[contenteditable=true]")].pop(); return (el.innerText||"").slice(0,60); }')
-                log_info(f"After final set: {chk}")
-                if campaignDescription[:10].lower() in str(chk).lower():
-                    found=True
-                else:
-                    log_warn("Proceeding to Continue despite empty - will still click as requested")
-                    found=True
+                # Last resort set
+                run_code('async page => { return await page.evaluate((val) => { let el=document.querySelector(".tiptap")||document.querySelector(".ProseMirror")||[...document.querySelectorAll("[contenteditable=true]")].pop(); if(el){ el.innerHTML="<p>"+val+"</p>"; el.dispatchEvent(new Event("input",{bubbles:true})); return "set"; } return "no-el"; }, ' + val_json + ') }')
+                sleep(500)
+                found = True
         except Exception as e:
             log_warn(f"final check failed {e}")
-            found=True
+            found = True
     log_info("Description verified (or forced) - now clicking Continue to Partners")
     cont=click_continue_and_expect("Partners")
     report["media"]["continueErrors"]=cont["errors"]
