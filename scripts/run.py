@@ -1600,11 +1600,22 @@ def main():
                     from common import sweeps_row_snapshot
                     row = sweeps_row_snapshot(sweep_title)
                     log_info(f"sweeps row snapshot: {row}")
-                    if row.get("found") and row.get("sweepsLink"):
+                    # sweeps_row_snapshot returns JSON string via --raw (double-encoded) — unwrap to dict
+                    if isinstance(row, str):
+                        try:
+                            tmp = json.loads(row)
+                            if isinstance(tmp, str):
+                                tmp = json.loads(tmp)
+                            row = tmp
+                        except Exception as _e:
+                            log_warn(f"row parse unwrap failed {_e}: {str(row)[:200]}")
+                            row = {"found": False}
+                    if isinstance(row, dict) and row.get("found") and row.get("sweepsLink"):
                         publicUrl_local = row["sweepsLink"]
                     else:
-                        raise Exception("row not found")
-                except:
+                        raise Exception(f"row not found or no sweepsLink: {row}")
+                except Exception as _ex:
+                    log_warn(f"sweeps_row_snapshot primary failed {_ex}, trying fallback JS")
                     # Fallback JS like in run.js publicUrlFromAdminRow - directly find a[aria-label="Sweeps link"] in row containing title (per your HTML)
                     raw = run_code(f"""async page => {{ return await page.evaluate((title) => {{
                         const rows = [...document.querySelectorAll('tr')].filter(tr => (tr.innerText || '').includes(title));
@@ -1621,9 +1632,25 @@ def main():
                         return JSON.stringify([{{ href: pick.href, label: (pick.getAttribute('aria-label') || pick.innerText || '').trim(), inRow: true }}]);
                     }}, {json.dumps(sweep_title)}) }}""")
                     import json as _js
-                    cands = _js.loads(raw.strip().strip('"').strip("'") or "[]")
+                    raw_clean = str(raw or "").strip()
+                    # unwrap outer --raw quotes: cli --raw returns "\"[{'href':...}]\"" — need double parse
+                    if len(raw_clean) >= 2 and raw_clean[0] in ('"', "'") and raw_clean[-1] == raw_clean[0]:
+                        try:
+                            inner = _js.loads(raw_clean)
+                            if isinstance(inner, str):
+                                raw_clean = inner
+                        except:
+                            raw_clean = raw_clean[1:-1].strip()
+                    try:
+                        cands = _js.loads(raw_clean or "[]")
+                    except Exception as _je:
+                        log_warn(f"fallback cands parse failed {_je}: raw={raw[:300]!r} clean={raw_clean[:300]!r}")
+                        cands = []
                     if isinstance(cands, str):
-                        cands = _js.loads(cands)
+                        try:
+                            cands = _js.loads(cands)
+                        except:
+                            cands = []
                     if not cands:
                         raise RuntimeError(f"No sweeps-link anchor found for {sweep_title}")
                     best = cands[0]
