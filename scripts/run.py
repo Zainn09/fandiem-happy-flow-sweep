@@ -1304,17 +1304,47 @@ def main():
                             log_warn(f"bonus drag & drop not confirmed {chk_drop}")
                     except Exception as e_drop:
                         log_warn(f"bonus drag & drop failed {e_drop}")
+                    # --- Alter way 2: Click the group (cursor-pointer) then use file chooser upload ---
+                    try:
+                        log_info("bonus: alter way - click div.group then upload_files")
+                        cli(["click", 'locator(\'div.group\').last()'], allow_failure=True)
+                        sleep(800)
+                        upload_files([bonusImage])
+                        sleep(1500)
+                        chk_alt = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.group input')||document.querySelector('input.hidden'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.group img'); if(img) return 'img:'+img.src.slice(-20); return 'no-alt';}); }")
+                        log_info(f"bonus click+upload verify {chk_alt}")
+                        if "files:" in str(chk_alt) or "img:" in str(chk_alt):
+                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "alter-click-upload:div.group"}
+                            log_info("bonus alter click+upload succeeded")
+                    except Exception as e_alt:
+                        log_warn(f"bonus alter click+upload failed {e_alt}")
+                    # --- Alter way 3: Direct JS setInputFiles via evaluate on hidden input ---
+                    try:
+                        log_info("bonus: alter way - JS direct setInputFiles on hidden input")
+                        _alt_bpaths = json.dumps([bonusImage])
+                        alt_res = run_code("async page => { try { const inp=document.querySelector('div.group input.hidden')||document.querySelector('div.group input')||document.querySelector('label:has-text(\\\"Bonus Image\\\") + div input'); if(!inp) return 'no-inp'; inp.classList.remove('hidden'); inp.removeAttribute('hidden'); inp.style.display='block'; inp.style.visibility='visible'; inp.style.opacity='1'; inp.style.width='100px'; inp.style.height='20px'; await page.locator('div.group input').last().setInputFiles(" + _alt_bpaths + "); const has=inp.files?inp.files.length:0; return 'alter-js-ok:'+has; } catch(e){ return 'alter-js-fail:'+String(e.message||e).slice(0,200); } }")
+                        log_info(f"bonus alter JS result {alt_res}")
+                        if "alter-js-ok:1" in str(alt_res):
+                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "alter-js-direct"}
+                            log_info("bonus alter JS direct succeeded")
+                    except Exception as e_js:
+                        log_warn(f"bonus alter JS failed {e_js}")
                     # Direct fast-path: Bonus image input same structure as your HTML - <div class=\"group relative flex... min-h-39\"><input class=\"hidden\" type=file> - handle like Campaign Gallery
                     direct_ok = False
                     try:
                         _bpaths = json.dumps([bonusImage])
                         # Try Bonus modal-specific selectors first (scoped to dialog), like Campaign uses div.space-y-2
+                        # Alternative selectors for your exact HTML: label Bonus Image -> div.space-y-1 -> div.group -> input.hidden
                         bonus_selectors = [
                             'div[role=\"dialog\"] input[type=file]',
                             'div[role=\"dialog\"] input.hidden',
+                            'label:has-text(\"Bonus Image\") + div input',
+                            'div.flex.flex-col.gap-1 input',
+                            'div.space-y-1 div.group input',
                             'div.group input[type=file]',
                             'div.min-h-39 input',
                             'div.space-y-1 input[type=file]',
+                            'input.hidden',
                         ]
                         direct = "no-try"
                         for _sel in bonus_selectors:
