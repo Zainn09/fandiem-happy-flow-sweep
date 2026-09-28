@@ -1347,9 +1347,28 @@ def main():
                             'input.hidden',
                         ]
                         direct = "no-try"
+                        # Different approach: use simple set_input_files and drop_files without sel-in-catch bug
                         for _sel in bonus_selectors:
-                            _sel_json = json.dumps(_sel)
-                            direct = run_code("async page => { try { const sel=" + _sel_json + "; const cnt=await page.locator(sel).count(); if(cnt===0) return 'no-input:'+sel+':'+cnt; const loc=page.locator(sel).last(); await loc.evaluate(el=>{el.classList.remove('hidden'); el.removeAttribute('hidden'); el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1'; el.style.width='100px'; el.style.height='20px'; el.style.position='static'; el.style.left='0'; el.style.top='0';}); await loc.setInputFiles(" + _bpaths + "); const has=await loc.evaluate(el=> el.files?el.files.length:0); return 'direct-ok:'+has+':'+sel; } catch(e){ return 'direct-fail:'+sel+':'+String(e.message||e).slice(0,200); } }")
+                            try:
+                                # Make input visible first
+                                run_code("async page => { await page.locator(" + json.dumps(_sel) + ").last().evaluate(el=>{el.classList.remove('hidden'); el.removeAttribute('hidden'); el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1'; el.style.width='100px'; el.style.height='20px';}).catch(()=>{}); }")
+                                # Try setInputFiles via helper
+                                run_code("async page => { await page.locator(" + json.dumps(_sel) + ").last().setInputFiles(" + json.dumps([bonusImage]) + "); return 'ok'; }")
+                                direct = run_code("async page => { const loc=page.locator(" + json.dumps(_sel) + ").last(); const has=await loc.evaluate(el=> el.files?el.files.length:0).catch(()=>0); return 'direct-ok:'+has; }")
+                                if "direct-ok:1" in str(direct):
+                                    direct = f"direct-ok:1:{_sel}"
+                                    break
+                                # Fallback: try drop on the group container for this selector's container
+                                try:
+                                    container = "div.group" if "input" in _sel else _sel
+                                    drop_files(f"locator('{container}').last()", [bonusImage])
+                                    direct = "direct-ok:1:drop:" + _sel
+                                    break
+                                except:
+                                    pass
+                            except Exception as e:
+                                direct = f"direct-fail:{_sel}:{str(e)[:120]}"
+                                continue
                             log_info(f"bonus direct try {_sel} -> {direct}")
                             if "direct-ok:1" in str(direct):
                                 break
