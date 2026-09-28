@@ -1286,15 +1286,28 @@ def main():
                     log_info(f"bonus file inputs before {inputs}")
                     reveal_file_inputs()
                     sleep(800)
-                    # Direct fast-path: setInputFiles on the Bonus modal's specific input (div.space-y-1) like Campaign's div.space-y-2
+                    # Direct fast-path: Bonus image input same structure as your HTML - <div class=\"group relative flex... min-h-39\"><input class=\"hidden\" type=file> - handle like Campaign Gallery
                     direct_ok = False
                     try:
                         _bpaths = json.dumps([bonusImage])
-                        direct = run_code("async page => { try { const sel='div.space-y-1 input[type=file]'; const cnt=await page.locator(sel).count(); if(cnt===0) return 'no-input-'+cnt; const loc=page.locator(sel).first(); await loc.evaluate(el=>{el.style.display='block';el.style.visibility='visible';el.style.opacity='1';el.style.width='100px';el.style.height='20px';el.removeAttribute('hidden');el.classList.remove('hidden');}); await loc.setInputFiles(" + _bpaths + "); const has=await page.locator(sel).first().evaluate(el=> el.files?el.files.length:0); return 'direct-ok:'+has; } catch(e){ return 'direct-fail:'+String(e.message||e).slice(0,200); } }")
-                        log_info(f"bonus direct setInputFiles result {direct}")
+                        # Try Bonus modal-specific selectors first (scoped to dialog), like Campaign uses div.space-y-2
+                        bonus_selectors = [
+                            'div[role=\"dialog\"] input[type=file]',
+                            'div[role=\"dialog\"] input.hidden',
+                            'div.group input[type=file]',
+                            'div.min-h-39 input',
+                            'div.space-y-1 input[type=file]',
+                        ]
+                        direct = "no-try"
+                        for _sel in bonus_selectors:
+                            _sel_json = json.dumps(_sel)
+                            direct = run_code("async page => { try { const sel=" + _sel_json + "; const cnt=await page.locator(sel).count(); if(cnt===0) return 'no-input:'+sel+':'+cnt; const loc=page.locator(sel).last(); await loc.evaluate(el=>{el.classList.remove('hidden'); el.removeAttribute('hidden'); el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1'; el.style.width='100px'; el.style.height='20px'; el.style.position='static'; el.style.left='0'; el.style.top='0';}); await loc.setInputFiles(" + _bpaths + "); const has=await loc.evaluate(el=> el.files?el.files.length:0); return 'direct-ok:'+has+':'+sel; } catch(e){ return 'direct-fail:'+sel+':'+String(e.message||e).slice(0,200); } }")
+                            log_info(f"bonus direct try {_sel} -> {direct}")
+                            if "direct-ok:1" in str(direct):
+                                break
                         if "direct-ok:1" in str(direct):
                             sleep(1200)
-                            chk = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.space-y-1 input[type=file]')||document.querySelector('div.flex.flex-col.gap-1 input[type=file]')||document.querySelector('div.group input[type=file]'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.space-y-1 img, div.flex.flex-col.gap-1 img, div.group img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.space-y-1 div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-preview'; }); }")
+                            chk = run_code("async page => { return await page.evaluate(()=>{ const dlg=document.querySelector('div[role=\"dialog\"]'); const inp=dlg? (dlg.querySelector('input[type=file]')||dlg.querySelector('input.hidden')||dlg.querySelector('div.group input')) : null; const inp2=inp||document.querySelector('div.group input[type=file]')||document.querySelector('input.hidden'); if(inp2&&inp2.files&&inp2.files.length>0) return 'files:'+inp2.files[0].name; const img=document.querySelector('div[role=\"dialog\"] img, div.group img, div.min-h-39 img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div[role=\"dialog\"] div.group')||document.querySelector('div.group.min-h-39')||document.querySelector('div.space-y-1 div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-preview'; }); }")
                             log_info(f"bonus direct verify {chk}")
                             if "files:" in str(chk) or "img:" in str(chk) or "zone-changed" in str(chk):
                                 report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "direct-setInputFiles:"+str(chk)[:60]}
@@ -1304,7 +1317,7 @@ def main():
                                 log_warn(f"bonus direct verify not yet {chk}, will poll 3s")
                                 for _ in range(6):
                                     sleep(500)
-                                    chk2 = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.space-y-1 input[type=file]'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.space-y-1 img'); return img?'img': 'no'; }); }")
+                                    chk2 = run_code("async page => { return await page.evaluate(()=>{ const dlg=document.querySelector('div[role=\"dialog\"]'); const inp=dlg?dlg.querySelector('input[type=file]'):null; if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div[role=\"dialog\"] img'); return img?'img': 'no'; }); }")
                                     if "files:" in str(chk2) or "img" in str(chk2):
                                         report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "direct-setInputFiles-poll"}
                                         direct_ok = True
