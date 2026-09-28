@@ -144,6 +144,13 @@ def click_first(targets, label):
     raise RuntimeError(f"Could not click {label}. Tried: {safe_join(targets,' | ')}")
 
 def click_continue_and_expect(expected):
+    # Dismiss any modal/banner that blocks clicks (Playwright extension banner)
+    try:
+        cli(["press", "Escape"], allow_failure=True); sleep(300)
+    except: pass
+    try:
+        run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.scrollIntoView({block:'center'}); return 'scrolled'; }"); sleep(400)
+    except: pass
     targets = [
         'locator(\'button[data-slot="button"][data-variant="gradient"][data-size="lg"]:has-text("CONTINUE")\')',
         'locator(\'button[data-variant="gradient"]:has-text("CONTINUE")\')',
@@ -171,17 +178,43 @@ def click_continue_and_expect(expected):
     log_info(f"CONTINUE clicked: {clicked[:120]} expecting {expected}")
     sleep(1800)
     errs=capture_visible_errors()
-    ok=wait_for_text(expected,25000)
+    # For Review, also accept "Review & Submit" or "Create Sweep" as success
+    expects = [expected]
+    if expected.lower() == "review":
+        expects = ["Review", "Review & Submit", "Create Sweep", "CREATE SWEEP"]
+    ok=False
+    for exp in expects:
+        if wait_for_text(exp, 8000):
+            ok=True
+            log_info(f"Reached {exp} (via expects {expects})")
+            expected=exp
+            break
     if not ok:
-        log_warn(f"Did not reach {expected}, retry. Errors: {safe_join(errs,' | ') or 'none'}")
+        # Retry with more diagnostics
+        log_warn(f"Did not reach {expected}, retry. Errors: {safe_join(errs,' | ') or 'none'}. Body snippet: {body_text()[:400]!r}")
         try:
+            # Scroll CONTINUE into view and retry
+            run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); return 'scrolled:'+b.innerText.slice(0,30); } return 'no-btn'; }")
+            sleep(500)
             cli(["click", targets[0]], allow_failure=True); sleep(1000)
-            run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b) b.click(); return 'ok'; }); }"); sleep(1500)
-        except: pass
+            js2=run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ if(b.disabled) return 'disabled:'+b.innerText; b.click(); return 'clicked-retry:'+b.innerText; } const all=[...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).filter(x=>x).slice(-8).join('|'); return 'no-btn buttons:'+all; }); }")
+            log_info(f"Retry JS: {js2}")
+            sleep(1500)
+        except Exception as e:
+            log_warn(f"retry click failed {e}")
         errs=capture_visible_errors()
-        ok=wait_for_text(expected,15000)
+        for exp in expects:
+            if wait_for_text(exp, 8000):
+                ok=True
+                log_info(f"Reached {exp} after retry")
+                break
     if not ok:
-        raise RuntimeError(f"Did not reach {expected} after CONTINUE. Errors: {safe_join(errs,' | ') or 'none'}. URL: {current_url()} Body: {body_text()[:800]}")
+        # Final diagnostics: dump buttons, URL, body
+        try:
+            btns = run_code("async page => { return await page.evaluate(() => [...document.querySelectorAll('button')].map(x=> (x.innerText||'').trim()).filter(x=>x).slice(-10).join('|')); }")
+            log_warn(f"Final buttons: {btns}")
+        except: pass
+        raise RuntimeError(f"Did not reach {expected} after CONTINUE. Errors: {safe_join(errs,' | ') or 'none'}. URL: {current_url()} Body: {body_text()[:1000]}")
     if errs: log_warn(f"visible errors after CONTINUE (reached {expected} anyway): {safe_join(errs,' | ')}")
     return {"clicked":clicked,"errors":errs}
 
@@ -218,6 +251,20 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
                 except: pass
                 sleep(500)
             return None
+        # Bonus has no gallery tiles - verify via input files / preview instead
+        if label == "Bonus":
+            end=time.time()+12
+            while time.time()<end:
+                try:
+                    r = run_code("async page => { return await page.evaluate(() => { const ins=[...document.querySelectorAll('input[type=\"file\"]')]; const last=ins[ins.length-1]; if(last && last.files && last.files.length>0) return 'files:'+last.files[0].name; const imgs=[...document.querySelectorAll('div.group img, div.space-y-1 img, div.flex.flex-col.gap-1 img')]; if(imgs.length>0 && imgs[0].src) return 'img:'+imgs[0].src.slice(-20); const zone=document.querySelector('div.group'); if(zone && zone.innerText && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); const body=document.body.innerText||''; if(body.includes('qa-bonus')||body.includes('Bonus')) return 'body-hint:'+body.slice(0,80); return 'no-bonus'; }); }")
+                    rs=str(r)
+                    if "files:" in rs or "img:" in rs or "zone-changed" in rs:
+                        log_info(f"{label}: {tag} ok files={names} via bonus check {rs[:80]}")
+                        return {"bonus": True, "check": rs, "tiles": gallery_tile_count(), "itemsText": gallery_items_text()}
+                except Exception as e:
+                    pass
+                sleep(500)
+            return None
         g=poll_media_increase(beforeTiles, beforeItems, 12000)
         if g: log_info(f"{label}: {tag} ok (tiles {beforeTiles}->{g['tiles']}, {g['itemsText'] or 'items n/a'}) files={names}"); return g
         return None
@@ -226,7 +273,8 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
     try: reveal_file_inputs(); sleep(500)
     except: pass
 
-    # 1) drop - only valid targets per your DOM
+    # 1) drop - only valid targets per your DOM (for Bonus, prefer setInputFiles first to avoid drop timeout)
+    _skip_drop_initial = (label == "Bonus")
     drop_targets=[]
     if drop_target: drop_targets.append(drop_target)
     if label and "Gallery" in label:
@@ -243,22 +291,31 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
             'locator(\'div.group:has(input[type="file"])\').first()',
             'locator(\'div.space-y-1 div.group\').first()',
         ])
+    elif label=="Bonus":
+        drop_targets.extend([
+            'locator(\'div.group:has(input[type="file"])\').last()',
+            'locator(\'div.space-y-1 div.group\').last()',
+            'locator(\'div.flex.flex-col.gap-1 div.group\').last()',
+            'locator(\'label:has-text("Bonus Image")\').first()',
+            'locator(\'div:has-text("Drag & drop or click to upload")\').last()',
+        ])
     else:
         drop_targets.extend(['locator(\'button:has-text("Add media")\').first()','locator(\'div.space-y-1\').first()'])
     uniq = list(dict.fromkeys(drop_targets))
-    for tgt in uniq:
-        try:
-            try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); return 'scrolled'; }")
-            except: pass
-            sleep(400)
-            log_info(f"{label}: strategy=drop target={tgt} files={names}")
-            drop_files(tgt, abs_paths)
-            g=confirm(f"drop:{tgt[:40]}")
-            if g: return {"strategy":"drop", **g, "target":tgt}
-            errors.append(f"drop:{tgt[:40]}: no new media (tiles {beforeTiles}->{gallery_tile_count()})")
-        except Exception as e:
-            errors.append(f"drop:{tgt[:40]}: {str(e)[:900].replace(chr(10),' | ')}")
-        sleep(500)
+    if not _skip_drop_initial:
+        for tgt in uniq:
+            try:
+                try: run_code("async page => { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); return 'scrolled'; }")
+                except: pass
+                sleep(400)
+                log_info(f"{label}: strategy=drop target={tgt} files={names}")
+                drop_files(tgt, abs_paths)
+                g=confirm(f"drop:{tgt[:40]}")
+                if g: return {"strategy":"drop", **g, "target":tgt}
+                errors.append(f"drop:{tgt[:40]}: no new media (tiles {beforeTiles}->{gallery_tile_count()})")
+            except Exception as e:
+                errors.append(f"drop:{tgt[:40]}: {str(e)[:900].replace(chr(10),' | ')}")
+            sleep(500)
 
     # 2) setInputFiles - PRIORITY for your DOM: Gallery=input[multiple], Cover=input:not([multiple])
     try:
@@ -301,6 +358,8 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
             selectors.extend(['div.space-y-2 input[type="file"][multiple]','div.space-y-2 input[multiple]','div.space-y-2 > input[type="file"]','button:has-text("Add media") + input[type="file"]','div.grid > input[type="file"][multiple]','div.grid input[type="file"][multiple]','div.grid input[multiple]','input[type="file"][multiple]','input[accept*="image"][multiple]'])
         elif label=="Cover":
             selectors.extend(['input[type="file"]:not([multiple])','input[accept*="image"]:not([multiple])','input[type="file"]','input[type=file]'])
+        elif label=="Bonus":
+            selectors.extend(['div.space-y-1 input[type="file"]','div.group input[type="file"]','label:has-text("Bonus Image") ~ div input[type="file"]','div.flex.flex-col.gap-1 input[type="file"]','div.flex.flex-col.gap-1 div.group input[type="file"]','input[type="file"]','input[type=file]','input[accept*="image"]'])
         else:
             selectors.extend(['input[type="file"]','input[type=file]','input[accept*="image"]','input.hidden','input[accept*="png"]'])
 
@@ -336,11 +395,28 @@ def attempt_upload(drop_target, click_target, input_nth, abs_paths, label, verif
     except Exception as e:
         errors.append(f"setInputFiles: {str(e)[:900].replace(chr(10),' | ')}")
 
+    # Bonus fallback drop (if setInputFiles failed, try drop now)
+    if _skip_drop_initial:
+        for tgt in uniq:
+            try:
+                try: run_code("async page => { const z=document.querySelector('div.group'); if(z) z.scrollIntoView({block:'center'}); return 'scrolled-bonus'; }")
+                except: pass
+                sleep(400)
+                log_info(f"{label}: fallback drop target={tgt} files={names}")
+                drop_files(tgt, abs_paths)
+                g=confirm(f"fallback-drop:{tgt[:40]}")
+                if g: return {"strategy":"fallback-drop", **g, "target":tgt}
+                errors.append(f"fallback-drop:{tgt[:40]}: no new media")
+            except Exception as e:
+                errors.append(f"fallback-drop:{tgt[:40]}: {str(e)[:900].replace(chr(10),' | ')}")
+            sleep(500)
     # 3) click+upload
     click_targets=[]
     if click_target: click_targets.append(click_target)
     if label and "Gallery" in label:
         click_targets.extend(['locator(\'button[type="button"]:has-text("Add media")\').first()','locator(\'button:has-text("Add media")\').first()'])
+    elif label=="Bonus":
+        click_targets.extend(['locator(\'div.group:has-text("Drag & drop or click to upload")\').last()','locator(\'div.space-y-1 div.group\').last()','locator(\'div:has-text("Drag & drop or click to upload")\').last()','locator(\'div.flex.flex-col.gap-1 div.group\').last()'])
     else:
         click_targets.extend(['locator(\'button:has-text("Add media")\').first()','locator(\'div.group:has-text("Drag & drop or click to upload")\').first()'])
     uniqc=list(dict.fromkeys(click_targets))
