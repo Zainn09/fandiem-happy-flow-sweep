@@ -1147,10 +1147,19 @@ def main():
                         try:
                             res = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document; const opts=[...menu.querySelectorAll('[role=\"menuitem\"],[role=\"menuitemcheckbox\"],[data-slot=\"dropdown-menu-item\"]')].filter(el=> !el.hasAttribute('disabled') && el.getAttribute('aria-disabled')!=='true' && !el.classList.contains('opacity-50') && el.offsetParent!==null); if(opts.length){ const first=opts.find(o=> !o.innerText.includes('already'))||opts[0]; first.scrollIntoView({block:'center'}); first.click(); return 'clicked-tier:'+first.innerText.slice(0,40); } const checks=[...document.querySelectorAll('[role=\"menu\"] button, [role=\"menuitem\"]')].filter(el=> el.offsetParent!==null); if(checks[0]){ checks[0].click(); return 'clicked-fallback:'+checks[0].innerText.slice(0,30); } return 'no-opts'; }); }")
                             log_info(f"tier select result {res}")
-                            sleep(700)
-                            # Do NOT press Escape - menu auto-closes after click, Escape would close Bonus modal itself
-                            log_info("tier menu should auto-close, not pressing Escape to keep Bonus modal open")
-                            # Verify Bonus modal still open after tier select (do not close it)
+                            sleep(600)
+                            # User requested: click on Entry Tiers Label to close dropdown, then upload image
+                            try:
+                                r2 = cli(["click", 'locator(\'label:has-text("Entry Tiers")\')'], allow_failure=True)
+                                if r2["code"] == 0:
+                                    log_info("clicked Entry Tiers label to close dropdown")
+                                else:
+                                    run_code("async page => { return await page.evaluate(() => { const lbl=[...document.querySelectorAll('label')].find(l=> (l.innerText||'').trim()==='Entry Tiers'); if(lbl){ lbl.click(); return 'clicked-label'; } const div=[...document.querySelectorAll('div')].find(d=> (d.innerText||'').trim()==='Entry Tiers'); if(div) div.click(); return 'no-label'; }); }")
+                                    log_info("clicked Entry Tiers via evaluate fallback")
+                                sleep(500)
+                            except Exception as e:
+                                log_warn(f"click Entry Tiers label failed {e}")
+                            # Verify Bonus modal still open after label click
                             try:
                                 _modal = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter bonus title\"]'); return el && el.offsetParent!==null ? 'open' : 'closed'; }")
                                 if "closed" in str(_modal):
