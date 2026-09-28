@@ -904,7 +904,7 @@ def main():
         print(f"Bonus: {bonusImage}")
         print("DRY RUN OK — Python assets resolve, config parses, title builds.")
         return
-    report={"startedAt":datetime.utcnow().isoformat()+"Z","sweepTitle":sweep_title,"status":"RUNNING","steps":[],"testData":{**data,"campaignDescription":campaignDescription},"selections":{},"media":{},"continueMode": is_continue_mode, "continueFrom": continue_from if is_continue_mode else None}
+    report={"startedAt":datetime.now().isoformat()+"Z","sweepTitle":sweep_title,"status":"RUNNING","steps":[],"testData":{**data,"campaignDescription":campaignDescription},"selections":{},"media":{},"continueMode": is_continue_mode, "continueFrom": continue_from if is_continue_mode else None}
     publicUrl=""
     try:
         if is_continue_mode:
@@ -1936,16 +1936,17 @@ def main():
                     continue
                 try:
                     # Find and click tab button/link
-                    js = run_code(f"""async page => {{ 
-                        const t={json.dumps(tab_label)};
-                        const cands=[...document.querySelectorAll('button, a, [role="tab"], [data-slot="tab"]')];
-                        let btn=cands.find(b=> (b.innerText||'').trim().toLowerCase().includes(t.toLowerCase().slice(0,15)));
+                    js = run_code(f"""async page => {{ return await page.evaluate((t) => {{ 
+                        const cands=[...document.querySelectorAll('div.font-body button, button')];
+                        // Your HTML: <div class="font-body flex gap-4 mb-[16px]"><div><button>Prize Details</button></div><div><button>Description</button></div>...
+                        let btn=cands.find(b=> (b.innerText||'').trim().toLowerCase() === t.toLowerCase());
+                        if(!btn) btn=cands.find(b=> (b.innerText||'').trim().toLowerCase().includes(t.toLowerCase().slice(0,15)));
                         if(!btn) btn=cands.find(b=> (b.innerText||'').trim().toLowerCase().includes(t.split(' ')[0].toLowerCase()));
                         if(!btn) return 'no-tab:'+t;
                         btn.scrollIntoView({{block:'center'}});
                         btn.click();
                         return 'clicked:'+t+':'+btn.tagName;
-                    }}""")
+                    }}, {json.dumps(tab_label)}) }}""")
                     log_info(f"Tab click {tab_label!r} -> {js}")
                     sleep(1000)
                     body_after = body_text()
@@ -1990,31 +1991,29 @@ def main():
             # variant text .chazify-cart-item-variant-text, qty .chazify-cart-item-qty-display, price .chazify-cart-item-price, subtotal .chazify-cart-subtotal-value
             try:
                 # Ensure we are still on storefront — if drawer closed, cart still has items via /cart.js
-                drawer_state = run_code("""async page => { 
+                drawer_state = run_code("""async page => { return await page.evaluate(() => {
                     const d=document.querySelector('div.chazify-cart-drawer');
                     const open=d && d.classList.contains('open');
                     const items=[...document.querySelectorAll('li.chazify-cart-item')];
                     return JSON.stringify({drawer_open: !!open, drawer_exists: !!d, item_count: items.length});
-                }""")
+                }); }""")
                 log_info(f"Drawer state before verify: {drawer_state}")
                 # If drawer not open, try to open via cart icon button if exists
                 try:
-                    _open_try = run_code("""async page => {
+                    _open_try = run_code("""async page => { return await page.evaluate(() => {
                         const d=document.querySelector('div.chazify-cart-drawer');
                         if(d && d.classList.contains('open')) return 'already-open';
                         const btn=document.querySelector('button.chazify-cart-close, a[href="/cart"], button[aria-label*="cart" i]');
-                        // Try clicking any cart trigger
                         const cartBtn=[...document.querySelectorAll('button, a')].find(b=> (b.getAttribute('aria-label')||'').toLowerCase().includes('cart') || (b.innerText||'').toLowerCase().includes('shopping cart'));
                         if(cartBtn){ cartBtn.click(); return 'clicked-cart-btn';}
-                        // fallback: fetch cart.js to see if items exist
                         return 'no-drawer-btn';
-                    }""")
+                    }); }""")
                     log_info(f"Drawer open attempt: {_open_try}")
                     sleep(800)
                 except: pass
 
                 # Parse cart items as per your HTML snippet
-                cart_html = run_code("""async page => {
+                cart_html = run_code("""async page => { return await page.evaluate(() => {
                     const items=[...document.querySelectorAll('li.chazify-cart-item')].map(li=>{
                         const variant=(li.querySelector('.chazify-cart-item-variant-text')||{}).innerText||'';
                         const qty=(li.querySelector('.chazify-cart-item-qty-display')||{}).innerText||'0';
@@ -2025,7 +2024,7 @@ def main():
                     const subtotal=(document.querySelector('.chazify-cart-subtotal-value')||{}).innerText||'';
                     const subtotal_label=(document.querySelector('.chazify-cart-subtotal-label')||{}).innerText||'';
                     return JSON.stringify({items, subtotal: subtotal.trim(), subtotal_label: subtotal_label.trim()});
-                }""")
+                }); }""")
                 log_info(f"Cart drawer raw: {cart_html[:800]!r}")
                 import json as _jc
                 _c_clean = str(cart_html or "").strip()
@@ -2091,31 +2090,31 @@ def main():
                 # Quantity update test — click + on first sweep item and check total updates
                 qty_update_ok = None
                 try:
-                    before_qty = run_code("""async page => {
+                    before_qty = run_code("""async page => { return await page.evaluate(() => {
                         const li=document.querySelector('li.chazify-cart-item');
                         const qtyEl=li && li.querySelector('.chazify-cart-item-qty-display');
                         return (qtyEl && qtyEl.innerText.trim()) || '0';
-                    }""")
+                    }); }""")
                     log_info(f"Qty before + click: {before_qty}")
                     # Click + button first item
-                    run_code("""async page => {
+                    run_code("""async page => { return await page.evaluate(() => {
                         const li=document.querySelector('li.chazify-cart-item');
                         const plus=[...li.querySelectorAll('button.chazify-cart-qty-btn')].find(b=> (b.innerText||'').includes('+'));
-                        if(plus) plus.click();
-                        return 'clicked-plus';
-                    }""")
+                        if(plus){ plus.click(); return 'clicked-plus';}
+                        return 'no-plus';
+                    }); }""")
                     sleep(1200)
-                    after_qty = run_code("""async page => {
+                    after_qty = run_code("""async page => { return await page.evaluate(() => {
                         const li=document.querySelector('li.chazify-cart-item');
                         return (li && li.querySelector('.chazify-cart-item-qty-display') && li.querySelector('.chazify-cart-item-qty-display').innerText.trim()) || '0';
-                    }""")
-                    after_price = run_code("""async page => {
+                    }); }""")
+                    after_price = run_code("""async page => { return await page.evaluate(() => {
                         const li=document.querySelector('li.chazify-cart-item');
                         return (li && li.querySelector('.chazify-cart-item-price') && li.querySelector('.chazify-cart-item-price').innerText.trim()) || '';
-                    }""")
-                    after_subtotal = run_code("""async page => {
+                    }); }""")
+                    after_subtotal = run_code("""async page => { return await page.evaluate(() => {
                         return (document.querySelector('.chazify-cart-subtotal-value') && document.querySelector('.chazify-cart-subtotal-value').innerText.trim()) || '';
-                    }""")
+                    }); }""")
                     log_info(f"Qty after + : {after_qty} price {after_price} subtotal {after_subtotal}")
                     # Parse numbers
                     bq = int(''.join(filter(str.isdigit, str(before_qty))) or 0)
@@ -2124,12 +2123,12 @@ def main():
                     qty_update_ok = (aq == bq + 1) if bq>0 else None
                     log_info(f"Quantity update +1: {bq} -> {aq} -> {'PASS' if qty_update_ok else 'FAIL'}")
                     # Click - to revert
-                    run_code("""async page => {
+                    run_code("""async page => { return await page.evaluate(() => {
                         const li=document.querySelector('li.chazify-cart-item');
                         const minus=[...li.querySelectorAll('button.chazify-cart-qty-btn')].find(b=> (b.innerText||'').includes('−') || (b.innerText||'').includes('-'));
-                        if(minus) minus.click();
-                        return 'clicked-minus';
-                    }""")
+                        if(minus){ minus.click(); return 'clicked-minus';}
+                        return 'no-minus';
+                    }); }""")
                     sleep(1000)
                 except Exception as e:
                     log_warn(f"Qty update test failed {e}")
@@ -2138,12 +2137,11 @@ def main():
                 # Remove test — click remove on last sweep item and check cart updates
                 remove_ok = None
                 try:
-                    before_count_raw = run_code("""async page => String(document.querySelectorAll('li.chazify-cart-item').length)""")
+                    before_count_raw = run_code("""async page => { return await page.evaluate(() => String(document.querySelectorAll('li.chazify-cart-item').length)); }""")
                     before_cnt = int(''.join(filter(str.isdigit, str(before_count_raw))) or 0)
                     log_info(f"Remove before count {before_cnt}")
-                    run_code("""async page => {
+                    run_code("""async page => { return await page.evaluate(() => {
                         const items=[...document.querySelectorAll('li.chazify-cart-item')];
-                        // Find last sweep item (title QA-AUTO... not Email Testing)
                         let target=null;
                         for(let i=items.length-1;i>=0;i--){
                             const t=(items[i].querySelector('.chazify-cart-item-title')||{}).innerText||'';
@@ -2151,13 +2149,13 @@ def main():
                         }
                         if(!target) target=items[items.length-1];
                         const btn=target && target.querySelector('button.chazify-cart-item-remove');
-                        if(btn) btn.click();
-                        return btn ? 'clicked-remove' : 'no-btn';
-                    }""")
+                        if(btn){ btn.click(); return 'clicked-remove';}
+                        return 'no-btn';
+                    }); }""")
                     sleep(1500)
-                    after_count_raw = run_code("""async page => String(document.querySelectorAll('li.chazify-cart-item').length)""")
+                    after_count_raw = run_code("""async page => { return await page.evaluate(() => String(document.querySelectorAll('li.chazify-cart-item').length)); }""")
                     after_cnt = int(''.join(filter(str.isdigit, str(after_count_raw))) or 0)
-                    after_sub2 = run_code("""async page => (document.querySelector('.chazify-cart-subtotal-value')||{}).innerText||''""")
+                    after_sub2 = run_code("""async page => { return await page.evaluate(() => (document.querySelector('.chazify-cart-subtotal-value')||{}).innerText||''); }""")
                     log_info(f"Remove after count {after_cnt} subtotal {after_sub2}")
                     remove_ok = (after_cnt == before_cnt - 1) if before_cnt>0 else None
                     log_info(f"Remove update: {before_cnt}->{after_cnt} -> {'PASS' if remove_ok else 'FAIL'}")
@@ -2198,7 +2196,7 @@ def main():
         step(report, "Verify storefront details and dynamic tabs", lambda: verify_storefront_details_and_tabs())
         step(report, "Verify cart drawer calculations", lambda: verify_cart_drawer_calculations())
         report["status"]="PASS"
-        report["finishedAt"]=datetime.utcnow().isoformat()+"Z"
+        report["finishedAt"]=datetime.now().isoformat()+"Z"
         report["publicUrl"]=publicUrl
         write_json("report.json", report)
         print("\n=== FANDIEM AUTOMATION PASSED (Python) ===")
@@ -2206,7 +2204,7 @@ def main():
     except Exception as e:
         import traceback
         report["status"]="FAIL"
-        report["finishedAt"]=datetime.utcnow().isoformat()+"Z"
+        report["finishedAt"]=datetime.now().isoformat()+"Z"
         report["error"]=str(e)
         write_json("report.json", report)
         print("\n=== FANDIEM AUTOMATION FAILED (Python) ===")
