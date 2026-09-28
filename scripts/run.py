@@ -1778,9 +1778,23 @@ def main():
                 log_info(f"found {count} add-to-cart buttons")
                 buttonTexts_raw = run_code("async page => { return await page.evaluate(() => JSON.stringify([...document.querySelectorAll('button#add-to-cart-btn')].map(x=>x.innerText.trim()))); }")
                 import json as _j3
-                buttonTexts = _j3.loads(buttonTexts_raw.strip().strip('"').strip("'") or "[]")
-                if isinstance(buttonTexts, str):
-                    buttonTexts = _j3.loads(buttonTexts)
+                _bt_clean = str(buttonTexts_raw or "").strip()
+                if len(_bt_clean) >= 2 and _bt_clean[0] in ('"', "'") and _bt_clean[-1] == _bt_clean[0]:
+                    try:
+                        _inner = _j3.loads(_bt_clean)
+                        if isinstance(_inner, str):
+                            _bt_clean = _inner
+                    except:
+                        _bt_clean = _bt_clean[1:-1]
+                try:
+                    buttonTexts = _j3.loads(_bt_clean or "[]")
+                    if isinstance(buttonTexts, str):
+                        buttonTexts = _j3.loads(buttonTexts)
+                    if not isinstance(buttonTexts, list):
+                        buttonTexts = [str(buttonTexts)]
+                except Exception as _e:
+                    log_warn(f"buttonTexts parse failed {_e}: raw={buttonTexts_raw[:300]!r} clean={_bt_clean[:300]!r} — using fallback")
+                    buttonTexts = []
                 cartResults = []
                 for i in range(count):
                     log_info(f"Cart button {i+1}/{count}: {buttonTexts[i] if i < len(buttonTexts) else ''}")
@@ -1805,11 +1819,22 @@ def main():
                     cart_state = None
                     try:
                         import json as _j4
-                        cart_state = _j4.loads(cart_state_raw.strip().strip('"').strip("'") or "null")
-                        if isinstance(cart_state, str):
-                            cart_state = _j4.loads(cart_state)
-                    except:
-                        pass
+                        _cs_clean = str(cart_state_raw or "").strip()
+                        if len(_cs_clean) >= 2 and _cs_clean[0] in ('"', "'") and _cs_clean[-1] == _cs_clean[0]:
+                            try:
+                                _inner2 = _j4.loads(_cs_clean)
+                                if isinstance(_inner2, str):
+                                    _cs_clean = _inner2
+                            except:
+                                _cs_clean = _cs_clean[1:-1]
+                        # _cs_clean may still be JSON string like '{"ok":true,...}' or double-encoded
+                        _cs_tmp = _j4.loads(_cs_clean or "null")
+                        if isinstance(_cs_tmp, str):
+                            _cs_tmp = _j4.loads(_cs_tmp)
+                        cart_state = _cs_tmp if isinstance(_cs_tmp, dict) else {"ok": False, "error": "not-dict"}
+                    except Exception as _e:
+                        log_warn(f"cart_state parse failed {_e}: raw={str(cart_state_raw)[:300]!r}")
+                        cart_state = {"ok": False, "error": str(_e)[:200]}
                     item_count = cart_state.get("item_count") if cart_state and cart_state.get("ok") else None
                     ok = has_post or (item_count is not None and item_count > 0)
                     cartResults.append({"index": i, "text": buttonTexts[i] if i < len(buttonTexts) else "", "postCartObserved": has_post, "ok": ok, "itemCount": item_count})
