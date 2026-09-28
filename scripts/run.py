@@ -164,7 +164,9 @@ def click_continue_and_expect(expected):
         js=run_code("""async page => { return await page.evaluate(() => {
       const b=[...document.querySelectorAll('button')].filter(x=>/CONTINUE|Continue/.test(x.innerText||'')); const g=b.find(x=>x.getAttribute('data-variant')==='gradient'||/gradient/.test(x.className||'')); const t=g||b[b.length-1]; if(!t) return 'no-btn:'+[...document.querySelectorAll('button')].map(x=>(x.innerText||'').trim()).filter(x=>x).slice(-10).join('|'); if(t.disabled) return 'disabled:'+t.innerText; t.click(); return 'clicked:'+t.innerText; }); }""")
         log_info(f"JS CONTINUE: {js}")
-        if str(js).startswith("clicked"): clicked="js:"+js
+        # Handle quoted raw output like '"clicked:Continue"' from --raw
+        _js_clean = str(js).strip().strip('"').strip("'").strip()
+        if _js_clean.startswith("clicked"): clicked="js:"+js
         else: raise RuntimeError(f"CONTINUE not found. JS: {js}")
     log_info(f"CONTINUE clicked: {clicked[:120]} expecting {expected}")
     sleep(1800)
