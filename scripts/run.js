@@ -2066,30 +2066,16 @@ async function addBonus(report) {
     logWarn('bonus modal has no entry-tier dropdown-menu-trigger (skipping link step)');
   }
 
-  let inputs = listFileInputs();
-  if (!Array.isArray(inputs)) inputs = [];
-  const bonusUploadProbe = () => {
-    const res = parseJson(evalPage(`() => JSON.stringify({
-      files: [...document.querySelectorAll('${MODAL} input[type="file"]')].reduce((n, i) => n + (i.files ? i.files.length : 0), 0),
-      images: [...document.querySelectorAll('${MODAL} img')].filter(i => /blob:|cloudinary|amazonaws|fandiem/i.test(i.getAttribute('src') || '')).length
-    })`), {});
-    return (res.files || 0) > 0 || (res.images || 0) > 0;
-  };
-  const res = await attemptUpload({
-    dropTarget: `locator('${MODAL} div:has-text("Drag & drop or click to upload")')`,
-    clickTarget: `locator('${MODAL} div:has-text("Drag & drop or click to upload")')`,
-    inputNth: inputs.length ? -1 : null,
-    absPaths: [bonusImage],
-    label: 'Bonus',
-    verify: bonusUploadProbe
-  });
+  // Bonus Image upload SKIPPED per user request - no image option in Bonus
+  logInfo("Bonus image upload SKIPPED - no image option as requested");
+  const res = { strategy: "skipped" };
 
   clickModalSave('Add Bonus');
   await sleep(1000);
   const saved = await waitForText(data.bonusTitle, 12000);
   if (!saved) throw new Error(`Bonus ${JSON.stringify(data.bonusTitle)} not listed after save. Errors: ${safeJoin(captureVisibleErrors(), ' | ') || 'none'}`);
   report.media = report.media || {};
-  report.media.bonus = { file: path.basename(bonusImage), strategy: res.strategy };
+  report.media.bonus = { file: path.basename(bonusImage), skipped: true, reason: "user requested no Bonus image upload", strategy: res.strategy };
   report.bonus = { title: data.bonusTitle, description: data.bonusDescription, modalHeading: info.heading, labels: info.labels, entryTierLink: tierLink, imageStrategy: res.strategy };
   logInfo(`bonus saved: ${data.bonusTitle} (image via ${res.strategy}${tierLink ? `, tier link ${tierLink.text}` : ''})`);
 }

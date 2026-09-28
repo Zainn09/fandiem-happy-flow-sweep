@@ -1201,20 +1201,10 @@ def main():
                         log_warn("Select entry tiers trigger not found, skipping tier select (optional)")
                 except Exception as e:
                     log_warn(f"entry tier dropdown failed {e}")
-                # Bonus Image upload - group dashed border with input hidden
-                try:
-                    inputs = list_file_inputs()
-                    log_info(f"bonus file inputs {inputs}")
-                    reveal_file_inputs()
-                    sleep(500)
-                    # The modal's upload zone is div with text Drag & drop or click to upload
-                    res = attempt_upload(drop_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', click_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', input_nth=-1 if inputs else None, abs_paths=[bonusImage], label="Bonus")
-                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
-                    log_info(f"bonus upload {res}")
-                    sleep(800)
-                except Exception as e:
-                    log_warn(f"bonus image upload failed {e}")
-                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "error": str(e)[:500]}
+                # Bonus Image upload SKIPPED per user request - no image option in Bonus
+                log_info("Bonus image upload SKIPPED - no image option as requested")
+                report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "skipped": True, "reason": "user requested no Bonus image upload"}
+                sleep(300)
                 # Click Add Bonus save - last button with that text
                 try:
                     _r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').last()'], allow_failure=True)
