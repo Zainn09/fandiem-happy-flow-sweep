@@ -1214,9 +1214,25 @@ def main():
                         try:
                             res = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document; const opts=[...menu.querySelectorAll('[role=\"menuitem\"],[role=\"menuitemcheckbox\"],[data-slot=\"dropdown-menu-item\"]')].filter(el=> !el.hasAttribute('disabled') && el.getAttribute('aria-disabled')!=='true' && !el.classList.contains('opacity-50')); if(opts.length){ const first=opts.find(o=> !o.innerText.includes('already'))||opts[0]; first.click(); return 'clicked-tier:'+first.innerText.slice(0,40); } const checks=[...document.querySelectorAll('[role=\"menu\"] button, [role=\"menuitem\"]')].filter(el=> el.offsetParent!==null); if(checks[0]){ checks[0].click(); return 'clicked-fallback:'+checks[0].innerText.slice(0,30); } return 'no-opts'; }); }")
                             log_info(f"tier select result {res}")
-                            sleep(500)
-                            cli(["press", "Escape"], allow_failure=True)
-                            sleep(300)
+                            sleep(600)
+                            # Only close menu if still open, avoid closing Bonus modal
+                            try:
+                                _menu_open = eval_page("() => { const m=document.querySelector('[role=\"menu\"]'); return m && m.offsetParent!==null ? 'open' : 'closed'; }")
+                                if "open" in str(_menu_open):
+                                    cli(["press", "Escape"], allow_failure=True)
+                                    sleep(300)
+                                    log_info("closed tier menu via Escape")
+                                else:
+                                    log_info("tier menu auto-closed")
+                            except: pass
+                            # Verify Bonus modal still open after tier select
+                            try:
+                                _modal = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter bonus title\"]'); return el && el.offsetParent!==null ? 'open' : 'closed'; }")
+                                if "closed" in str(_modal):
+                                    log_warn("Bonus modal closed after tier select - may need reopen")
+                                else:
+                                    log_info("Bonus modal still open after tier select")
+                            except: pass
                         except Exception as e:
                             log_warn(f"tier select evaluate failed {e}")
                     else:
