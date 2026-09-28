@@ -1212,24 +1212,21 @@ def main():
                         sleep(1000)
                         # Try to select first available tier via evaluate
                         try:
-                            res = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document; const opts=[...menu.querySelectorAll('[role=\"menuitem\"],[role=\"menuitemcheckbox\"],[data-slot=\"dropdown-menu-item\"]')].filter(el=> !el.hasAttribute('disabled') && el.getAttribute('aria-disabled')!=='true' && !el.classList.contains('opacity-50')); if(opts.length){ const first=opts.find(o=> !o.innerText.includes('already'))||opts[0]; first.click(); return 'clicked-tier:'+first.innerText.slice(0,40); } const checks=[...document.querySelectorAll('[role=\"menu\"] button, [role=\"menuitem\"]')].filter(el=> el.offsetParent!==null); if(checks[0]){ checks[0].click(); return 'clicked-fallback:'+checks[0].innerText.slice(0,30); } return 'no-opts'; }); }")
+                            res = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document; const opts=[...menu.querySelectorAll('[role=\"menuitem\"],[role=\"menuitemcheckbox\"],[data-slot=\"dropdown-menu-item\"]')].filter(el=> !el.hasAttribute('disabled') && el.getAttribute('aria-disabled')!=='true' && !el.classList.contains('opacity-50') && el.offsetParent!==null); if(opts.length){ const first=opts.find(o=> !o.innerText.includes('already'))||opts[0]; first.scrollIntoView({block:'center'}); first.click(); return 'clicked-tier:'+first.innerText.slice(0,40); } const checks=[...document.querySelectorAll('[role=\"menu\"] button, [role=\"menuitem\"]')].filter(el=> el.offsetParent!==null); if(checks[0]){ checks[0].click(); return 'clicked-fallback:'+checks[0].innerText.slice(0,30); } return 'no-opts'; }); }")
                             log_info(f"tier select result {res}")
-                            sleep(600)
-                            # Only close menu if still open, avoid closing Bonus modal
-                            try:
-                                _menu_open = eval_page("() => { const m=document.querySelector('[role=\"menu\"]'); return m && m.offsetParent!==null ? 'open' : 'closed'; }")
-                                if "open" in str(_menu_open):
-                                    cli(["press", "Escape"], allow_failure=True)
-                                    sleep(300)
-                                    log_info("closed tier menu via Escape")
-                                else:
-                                    log_info("tier menu auto-closed")
-                            except: pass
-                            # Verify Bonus modal still open after tier select
+                            sleep(700)
+                            # Do NOT press Escape - menu auto-closes after click, Escape would close Bonus modal itself
+                            log_info("tier menu should auto-close, not pressing Escape to keep Bonus modal open")
+                            # Verify Bonus modal still open after tier select (do not close it)
                             try:
                                 _modal = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter bonus title\"]'); return el && el.offsetParent!==null ? 'open' : 'closed'; }")
                                 if "closed" in str(_modal):
-                                    log_warn("Bonus modal closed after tier select - may need reopen")
+                                    log_warn("Bonus modal closed after tier select - reopening Add Bonus")
+                                    # Try to reopen Add Bonus if closed prematurely
+                                    try:
+                                        cli(["click", 'locator(\'button:has-text("Add Bonus")\').first()'], allow_failure=True)
+                                        sleep(1200)
+                                    except: pass
                                 else:
                                     log_info("Bonus modal still open after tier select")
                             except: pass
