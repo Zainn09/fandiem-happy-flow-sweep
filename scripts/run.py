@@ -1141,16 +1141,38 @@ def main():
         def stub_bonus():
             heading("Bonuses")
             try:
-                # Click Add Bonus to open modal - page has button Add Bonus
-                try:
-                    r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').first()'], allow_failure=True)
-                    if r["code"] != 0:
-                        r = cli(["click", locator("role","button",{"name":"Add Bonus"})], allow_failure=True)
-                    if r["code"] != 0:
-                        run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Bonus'); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked'; } return 'no-btn'; }); }")
-                    log_info("clicked Add Bonus to open modal")
-                except Exception as e:
-                    log_warn(f"open Add Bonus failed {e}")
+                # Click Add Bonus to open modal - must click page button (first) before modal opens, like Promotion Tabs
+                opened = False
+                for _attempt in range(3):
+                    try:
+                        # Ensure button is scrolled into view
+                        try:
+                            run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Bonus'); if(b){ b.scrollIntoView({block:'center'}); return 'scrolled'; } return 'no-btn'; }); }")
+                            sleep(400)
+                        except: pass
+                        r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').first()'], allow_failure=True)
+                        if r["code"] == 0:
+                            log_info(f"clicked Add Bonus to open modal via first() attempt {_attempt+1}")
+                            opened = True
+                            break
+                        r2 = cli(["click", locator("role","button",{"name":"Add Bonus"})], allow_failure=True)
+                        if r2["code"] == 0:
+                            log_info("clicked Add Bonus via role")
+                            opened = True
+                            break
+                        js = run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Bonus'); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked'; } return 'no-btn'; }); }")
+                        if "clicked" in str(js):
+                            log_info(f"clicked Add Bonus via JS {js}")
+                            opened = True
+                            break
+                    except Exception as e:
+                        log_warn(f"open Add Bonus attempt {_attempt+1} failed {e}")
+                    sleep(600)
+                if not opened:
+                    log_warn("Add Bonus open not confirmed via CLI, trying JS fallback once more")
+                    try:
+                        run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Bonus'); if(b) b.click(); return 'clicked'; }); }")
+                    except: pass
                 sleep(1500)
                 # Wait for modal visible - Title input placeholder Enter bonus title
                 for _mi in range(8):
