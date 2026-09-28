@@ -1293,10 +1293,9 @@ def main():
                             run_code("async page => { return await page.evaluate(() => { const z=document.querySelector('div.group'); if(z){z.scrollIntoView({block:'center',behavior:'instant'}); return 'scrolled';} return 'no-zone';}); }")
                             sleep(400)
                         except: pass
-                        # Fast: use the successful selector from log (div.space-y-1 div.group) first to reduce time
-                        drop_files('locator(\'div.space-y-1 div.group\').last()', [bonusImage])
-                        sleep(1000)
-                        chk_drop = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.space-y-1 div.group input')||document.querySelector('div.group input'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.space-y-1 div.group img, div.group img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.space-y-1 div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-drop';}); }")
+                        drop_files('locator(\'div.group\').last()', [bonusImage])
+                        sleep(1500)
+                        chk_drop = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.group input'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.group img, div.min-h-39 img'); if(img) return 'img:'+img.src.slice(-20); const zone=document.querySelector('div.group'); if(zone && !zone.innerText.includes('Drag & drop')) return 'zone-changed:'+zone.innerText.slice(0,30); return 'no-drop';}); }")
                         log_info(f"bonus drag & drop verify {chk_drop}")
                         if "files:" in str(chk_drop) or "img:" in str(chk_drop) or "zone-changed" in str(chk_drop):
                             report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "drag-drop:div.group"}
@@ -1305,67 +1304,22 @@ def main():
                             log_warn(f"bonus drag & drop not confirmed {chk_drop}")
                     except Exception as e_drop:
                         log_warn(f"bonus drag & drop failed {e_drop}")
-                    # --- Alter way 2: Click the group (cursor-pointer) then use file chooser upload ---
-                    try:
-                        log_info("bonus: alter way - click div.group then upload_files")
-                        cli(["click", 'locator(\'div.group\').last()'], allow_failure=True)
-                        sleep(800)
-                        upload_files([bonusImage])
-                        sleep(1500)
-                        chk_alt = run_code("async page => { return await page.evaluate(()=>{ const inp=document.querySelector('div.group input')||document.querySelector('input.hidden'); if(inp&&inp.files&&inp.files.length>0) return 'files:'+inp.files[0].name; const img=document.querySelector('div.group img'); if(img) return 'img:'+img.src.slice(-20); return 'no-alt';}); }")
-                        log_info(f"bonus click+upload verify {chk_alt}")
-                        if "files:" in str(chk_alt) or "img:" in str(chk_alt):
-                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "alter-click-upload:div.group"}
-                            log_info("bonus alter click+upload succeeded")
-                    except Exception as e_alt:
-                        log_warn(f"bonus alter click+upload failed {e_alt}")
-                    # --- Alter way 3: Direct JS setInputFiles via evaluate on hidden input ---
-                    try:
-                        log_info("bonus: alter way - JS direct setInputFiles on hidden input")
-                        _alt_bpaths = json.dumps([bonusImage])
-                        alt_res = run_code("async page => { try { const inp=document.querySelector('div.group input.hidden')||document.querySelector('div.group input')||document.querySelector('label:has-text(\\\"Bonus Image\\\") + div input'); if(!inp) return 'no-inp'; inp.classList.remove('hidden'); inp.removeAttribute('hidden'); inp.style.display='block'; inp.style.visibility='visible'; inp.style.opacity='1'; inp.style.width='100px'; inp.style.height='20px'; await page.locator('div.group input').last().setInputFiles(" + _alt_bpaths + "); const has=inp.files?inp.files.length:0; return 'alter-js-ok:'+has; } catch(e){ return 'alter-js-fail:'+String(e.message||e).slice(0,200); } }")
-                        log_info(f"bonus alter JS result {alt_res}")
-                        if "alter-js-ok:1" in str(alt_res):
-                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": "alter-js-direct"}
-                            log_info("bonus alter JS direct succeeded")
-                    except Exception as e_js:
-                        log_warn(f"bonus alter JS failed {e_js}")
                     # Direct fast-path: Bonus image input same structure as your HTML - <div class=\"group relative flex... min-h-39\"><input class=\"hidden\" type=file> - handle like Campaign Gallery
                     direct_ok = False
                     try:
                         _bpaths = json.dumps([bonusImage])
                         # Try Bonus modal-specific selectors first (scoped to dialog), like Campaign uses div.space-y-2
-                        # Alternative selectors for your exact HTML: label Bonus Image -> div.space-y-1 -> div.group -> input.hidden
-                        # Optimized: try successful drop selector first to reduce time (log showed div.space-y-1 div.group drop succeeded)
                         bonus_selectors = [
-                            'div.space-y-1 div.group input',
-                            'div.group input[type=file]',
                             'div[role=\"dialog\"] input[type=file]',
-                            'label:has-text(\"Bonus Image\") + div input',
+                            'div[role=\"dialog\"] input.hidden',
+                            'div.group input[type=file]',
+                            'div.min-h-39 input',
+                            'div.space-y-1 input[type=file]',
                         ]
                         direct = "no-try"
-                        # Different approach: use simple set_input_files and drop_files without sel-in-catch bug
                         for _sel in bonus_selectors:
-                            try:
-                                # Make input visible first
-                                run_code("async page => { await page.locator(" + json.dumps(_sel) + ").last().evaluate(el=>{el.classList.remove('hidden'); el.removeAttribute('hidden'); el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1'; el.style.width='100px'; el.style.height='20px';}).catch(()=>{}); }")
-                                # Try setInputFiles via helper
-                                run_code("async page => { await page.locator(" + json.dumps(_sel) + ").last().setInputFiles(" + json.dumps([bonusImage]) + "); return 'ok'; }")
-                                direct = run_code("async page => { const loc=page.locator(" + json.dumps(_sel) + ").last(); const has=await loc.evaluate(el=> el.files?el.files.length:0).catch(()=>0); return 'direct-ok:'+has; }")
-                                if "direct-ok:1" in str(direct):
-                                    direct = f"direct-ok:1:{_sel}"
-                                    break
-                                # Fallback: try drop on the group container for this selector's container
-                                try:
-                                    container = "div.group" if "input" in _sel else _sel
-                                    drop_files(f"locator('{container}').last()", [bonusImage])
-                                    direct = "direct-ok:1:drop:" + _sel
-                                    break
-                                except:
-                                    pass
-                            except Exception as e:
-                                direct = f"direct-fail:{_sel}:{str(e)[:120]}"
-                                continue
+                            _sel_json = json.dumps(_sel)
+                            direct = run_code("async page => { try { const sel=" + _sel_json + "; const cnt=await page.locator(sel).count(); if(cnt===0) return 'no-input:'+sel+':'+cnt; const loc=page.locator(sel).last(); await loc.evaluate(el=>{el.classList.remove('hidden'); el.removeAttribute('hidden'); el.style.display='block'; el.style.visibility='visible'; el.style.opacity='1'; el.style.width='100px'; el.style.height='20px'; el.style.position='static'; el.style.left='0'; el.style.top='0';}); await loc.setInputFiles(" + _bpaths + "); const has=await loc.evaluate(el=> el.files?el.files.length:0); return 'direct-ok:'+has+':'+sel; } catch(e){ return 'direct-fail:'+sel+':'+String(e.message||e).slice(0,200); } }")
                             log_info(f"bonus direct try {_sel} -> {direct}")
                             if "direct-ok:1" in str(direct):
                                 break
@@ -1389,16 +1343,10 @@ def main():
                         if not direct_ok:
                             raise RuntimeError(f"direct not confirmed {direct}")
                     except Exception as de:
-                        log_warn(f"bonus direct failed {de}, trying fast fallback drop first to reduce time")
-                        # Fast fallback first: the successful strategy from log - drop on div.space-y-1 div.group
-                        try:
-                            res = attempt_upload(drop_target='locator(\'div.space-y-1 div.group\').last()', click_target='locator(\'div.space-y-1 div.group\').last()', input_nth=0, abs_paths=[bonusImage], label="Bonus")
-                            report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
-                            log_info(f"bonus upload fast fallback success {res}")
-                        except Exception as e2:
-                            log_warn(f"fast fallback also failed {e2}, trying exhaustive selectors")
-                            # Then fallback to exhaustive - but we already tried, so just re-raise
-                            raise
+                        log_warn(f"bonus direct failed {de}, falling back to attempt_upload")
+                        res = attempt_upload(drop_target='locator(\'div.space-y-1 div.group\').last()', click_target='locator(\'div.space-y-1 div.group\').last()', input_nth=0, abs_paths=[bonusImage], label="Bonus")
+                        report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
+                        log_info(f"bonus upload fallback {res}")
                     sleep(800)
                 except Exception as e:
                     log_warn(f"bonus image upload failed {e}")
