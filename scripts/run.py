@@ -1224,15 +1224,34 @@ def main():
                             res = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document; const opts=[...menu.querySelectorAll('[role=\"menuitem\"],[role=\"menuitemcheckbox\"],[data-slot=\"dropdown-menu-item\"]')].filter(el=> !el.hasAttribute('disabled') && el.getAttribute('aria-disabled')!=='true' && !el.classList.contains('opacity-50') && el.offsetParent!==null); if(opts.length){ const first=opts.find(o=> !o.innerText.includes('already'))||opts[0]; first.scrollIntoView({block:'center'}); first.click(); return 'clicked-tier:'+first.innerText.slice(0,40); } const checks=[...document.querySelectorAll('[role=\"menu\"] button, [role=\"menuitem\"]')].filter(el=> el.offsetParent!==null); if(checks[0]){ checks[0].click(); return 'clicked-fallback:'+checks[0].innerText.slice(0,30); } return 'no-opts'; }); }")
                             log_info(f"tier select result {res}")
                             sleep(600)
-                            # User requested: click on Entry Tiers Label to close dropdown, then upload image
+                            # User requested: click on Entry Tiers Label to close dropdown, then upload image - like Campaign Cover/Gallery
                             try:
-                                r2 = cli(["click", 'locator(\'label:has-text("Entry Tiers")\')'], allow_failure=True)
-                                if r2["code"] == 0:
-                                    log_info("clicked Entry Tiers label to close dropdown")
-                                else:
-                                    run_code("async page => { return await page.evaluate(() => { const lbl=[...document.querySelectorAll('label')].find(l=> (l.innerText||'').trim()==='Entry Tiers'); if(lbl){ lbl.click(); return 'clicked-label'; } const div=[...document.querySelectorAll('div')].find(d=> (d.innerText||'').trim()==='Entry Tiers'); if(div) div.click(); return 'no-label'; }); }")
-                                    log_info("clicked Entry Tiers via evaluate fallback")
-                                sleep(500)
+                                clicked_label = False
+                                for _sel in ['locator(\'label:has-text("Entry Tiers")\')', 'locator(\'div:has-text("Entry Tiers")\').first()', 'locator(\'span:has-text("Entry Tiers")\').first()']:
+                                    r2 = cli(["click", _sel], allow_failure=True)
+                                    if r2["code"] == 0:
+                                        log_info(f"clicked Entry Tiers label via {_sel} to close dropdown")
+                                        clicked_label = True
+                                        break
+                                    sleep(300)
+                                if not clicked_label:
+                                    res_lbl = run_code("async page => { return await page.evaluate(() => { const modal=document.querySelector('input[placeholder=\"Enter bonus title\"]')?.closest('div[role=\"dialog\"]')||document.querySelector('div[role=\"dialog\"]')||document; const cands=[...modal.querySelectorAll('label, div, span, p')].filter(el=> (el.innerText||'').trim()==='Entry Tiers'); if(cands.length){ cands[0].scrollIntoView({block:'center'}); cands[0].click(); return 'clicked-modal-label:'+cands[0].tagName; } const fallback=[...document.querySelectorAll('label')].find(l=> (l.innerText||'').trim()==='Entry Tiers'); if(fallback){ fallback.scrollIntoView({block:'center'}); fallback.click(); return 'clicked-fallback-label'; } const d=[...document.querySelectorAll('div')].find(x=> (x.innerText||'').trim()==='Entry Tiers'); if(d){ d.scrollIntoView({block:'center'}); d.click(); return 'clicked-div'; } return 'no-label'; }); }")
+                                    log_info(f"Entry Tiers label evaluate {res_lbl}")
+                                    if "clicked" in str(res_lbl):
+                                        clicked_label = True
+                                sleep(700)
+                                # Verify dropdown closed like Campaign Gallery dropdown verification
+                                try:
+                                    state = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document.querySelector('[data-slot=\"dropdown-menu-content\"]'); if(!menu) return 'no-menu'; const vis = menu.offsetParent!==null || getComputedStyle(menu).visibility!=='hidden'; return vis?'menu-open':'menu-closed'; }); }")
+                                    log_info(f"dropdown state after label click: {state}")
+                                    if "open" in str(state):
+                                        log_warn("dropdown still open after label click, trying modal background click as Campaign does")
+                                        run_code("async page => { return await page.evaluate(() => { const modal=document.querySelector('div[role=\"dialog\"]')||document.querySelector('input[placeholder=\"Enter bonus title\"]')?.closest('div'); if(modal){ modal.click(); return 'clicked-modal-bg'; } document.body.click(); return 'clicked-body'; }); }")
+                                        sleep(500)
+                                        state2 = run_code("async page => { return await page.evaluate(() => { const m=document.querySelector('[role=\"menu\"]'); return m && m.offsetParent!==null ? 'still-open':'closed-now'; }); }")
+                                        log_info(f"dropdown retry state {state2}")
+                                except Exception as e:
+                                    log_warn(f"dropdown verify failed {e}")
                             except Exception as e:
                                 log_warn(f"click Entry Tiers label failed {e}")
                             # Verify Bonus modal still open after label click
