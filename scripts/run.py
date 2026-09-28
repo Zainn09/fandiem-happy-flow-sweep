@@ -1141,22 +1141,106 @@ def main():
         def stub_bonus():
             heading("Bonuses")
             try:
-                click_first([locator("role","button",{"name":"Add Bonus"}).replace(".first()","")+".first()", 'locator(\'button:has-text("Add Bonus")\').first()'], "Add Bonus")
-                sleep(1200)
-                run_code("async page => { const m=document.querySelector('[role=\"dialog\"]')||document.querySelector('[data-slot=\"dialog-content\"]'); if(m) m.setAttribute('data-qa-modal','1'); return 'ok'; }")
-                fill('locator(\'input[placeholder="Enter bonus title"]\')', data["bonusTitle"])
-                # description
-                try: fill('locator(\'[contenteditable="true"]\').last()', data["bonusDescription"])
-                except: pass
-                # image via upload
-                inputs=list_file_inputs()
-                res=attempt_upload(drop_target='locator(\'[data-qa-modal="1"] div:has-text("Drag & drop or click to upload")\')', click_target='locator(\'[data-qa-modal="1"] div:has-text("Drag & drop or click to upload")\')', input_nth=-1 if inputs else None, abs_paths=[bonusImage], label="Bonus")
-                report["media"]["bonus"]={"file":pathlib.Path(bonusImage).name,"strategy":res["strategy"]}
-                # save
-                run_code("async page => { const m=document.querySelector('[data-qa-modal=\"1\"]'); const b=[...m.querySelectorAll('button')].find(x=>/Add Bonus/i.test(x.innerText||'')); if(b) b.click(); return 'ok'; }")
-                sleep(1000)
+                # Click Add Bonus to open modal - page has button Add Bonus
+                try:
+                    r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').first()'], allow_failure=True)
+                    if r["code"] != 0:
+                        r = cli(["click", locator("role","button",{"name":"Add Bonus"})], allow_failure=True)
+                    if r["code"] != 0:
+                        run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=> (x.innerText||'').trim()==='Add Bonus'); if(b){ b.scrollIntoView({block:'center'}); b.click(); return 'clicked'; } return 'no-btn'; }); }")
+                    log_info("clicked Add Bonus to open modal")
+                except Exception as e:
+                    log_warn(f"open Add Bonus failed {e}")
+                sleep(1500)
+                # Wait for modal visible - Title input placeholder Enter bonus title
+                for _mi in range(8):
+                    try:
+                        _vis = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter bonus title\"]'); return el && el.offsetParent!==null ? 'visible' : 'hidden'; }")
+                        if "visible" in str(_vis):
+                            log_info("Bonus modal visible")
+                            break
+                    except: pass
+                    sleep(500)
+                # Fill Title - required
+                try:
+                    fill('locator(\'input[placeholder="Enter bonus title"]\')', data["bonusTitle"])
+                    log_info(f"filled bonus title {data['bonusTitle'][:40]}")
+                except Exception as e:
+                    log_warn(f"bonus title fill failed {e}")
+                    try:
+                        run_code(f"async page => {{ return await page.evaluate((val) => {{ const inp=document.querySelector('input[placeholder=\"Enter bonus title\"]'); if(inp){{ inp.focus(); inp.value=val; inp.dispatchEvent(new Event('input',{chr(123)}bubbles:true{chr(125)})); return 'ok'; }} return 'no-inp'; }}, {__import__('json').dumps(data['bonusTitle'])}) }}")
+                    except: pass
+                # Fill Description - tiptap ProseMirror inside modal, placeholder Enter the description…
+                try:
+                    _val = __import__('json').dumps(data["bonusDescription"])
+                    run_code('async page => { return await page.evaluate((val) => { let modal=[...document.querySelectorAll("div")].find(d=> d.innerText && d.innerText.includes("Add Bonus") && d.querySelector("[contenteditable=true]")) || document; let el=modal.querySelector(".tiptap") || modal.querySelector(".ProseMirror") || modal.querySelector("[contenteditable=true]") || document.querySelector("[data-placeholder=\"Enter the description\u2026\"]") || document.querySelector("[data-placeholder=\"Enter the description...\"]"); if(!el){ const all=[...document.querySelectorAll("[contenteditable=true]")]; el=all[all.length-1]; } if(el){ el.focus(); el.scrollIntoView({block:"center"}); document.execCommand("selectAll", false, null); document.execCommand("insertText", false, val); el.dispatchEvent(new Event("input",{bubbles:true})); if(!(el.innerText||"").includes(val.slice(0,10))){ el.innerHTML="<p>"+val.replace(/</g,"&lt;")+"</p>"; el.dispatchEvent(new Event("input",{bubbles:true})); } return "filled:"+(el.innerText||"").slice(0,50); } return "no-el"; }, ' + _val + ') }')
+                    sleep(600)
+                except Exception as e:
+                    log_warn(f"bonus desc fill failed {e}")
+                    try:
+                        fill('locator(\'[contenteditable="true"]\').last()', data["bonusDescription"])
+                    except: pass
+                # Select Entry Tiers - dropdown Select entry tiers… then pick first enabled tier
+                try:
+                    r = cli(["click", 'locator(\'button:has-text("Select entry tiers")\')'], allow_failure=True)
+                    if r["code"] != 0:
+                        r = cli(["click", 'locator(\'button[id^="radix-"] span:has-text("Select entry tiers")\')'], allow_failure=True)
+                    if r["code"] == 0:
+                        log_info("opened Entry Tiers dropdown")
+                        sleep(1000)
+                        # Try to select first available tier via evaluate
+                        try:
+                            res = run_code("async page => { return await page.evaluate(() => { const menu=document.querySelector('[role=\"menu\"]')||document.querySelector('[data-radix-popper-content-wrapper]')||document; const opts=[...menu.querySelectorAll('[role=\"menuitem\"],[role=\"menuitemcheckbox\"],[data-slot=\"dropdown-menu-item\"]')].filter(el=> !el.hasAttribute('disabled') && el.getAttribute('aria-disabled')!=='true' && !el.classList.contains('opacity-50')); if(opts.length){ const first=opts.find(o=> !o.innerText.includes('already'))||opts[0]; first.click(); return 'clicked-tier:'+first.innerText.slice(0,40); } const checks=[...document.querySelectorAll('[role=\"menu\"] button, [role=\"menuitem\"]')].filter(el=> el.offsetParent!==null); if(checks[0]){ checks[0].click(); return 'clicked-fallback:'+checks[0].innerText.slice(0,30); } return 'no-opts'; }); }")
+                            log_info(f"tier select result {res}")
+                            sleep(500)
+                            cli(["press", "Escape"], allow_failure=True)
+                            sleep(300)
+                        except Exception as e:
+                            log_warn(f"tier select evaluate failed {e}")
+                    else:
+                        log_warn("Select entry tiers trigger not found, skipping tier select (optional)")
+                except Exception as e:
+                    log_warn(f"entry tier dropdown failed {e}")
+                # Bonus Image upload - group dashed border with input hidden
+                try:
+                    inputs = list_file_inputs()
+                    log_info(f"bonus file inputs {inputs}")
+                    reveal_file_inputs()
+                    sleep(500)
+                    # The modal's upload zone is div with text Drag & drop or click to upload
+                    res = attempt_upload(drop_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', click_target='locator(\'div:has-text("Drag & drop or click to upload")\').last()', input_nth=-1 if inputs else None, abs_paths=[bonusImage], label="Bonus")
+                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "strategy": res["strategy"]}
+                    log_info(f"bonus upload {res}")
+                    sleep(800)
+                except Exception as e:
+                    log_warn(f"bonus image upload failed {e}")
+                    report["media"]["bonus"] = {"file": pathlib.Path(bonusImage).name, "error": str(e)[:500]}
+                # Click Add Bonus save - last button with that text
+                try:
+                    _r = cli(["click", 'locator(\'button:has-text("Add Bonus")\').last()'], allow_failure=True)
+                    if _r["code"] == 0:
+                        log_info("clicked Add Bonus save via last()")
+                    else:
+                        log_warn(f"save click failed {_r['stderr'][:200] if _r['stderr'] else _r['stdout'][:200]}")
+                        run_code("async page => { return await page.evaluate(() => { const btns=[...document.querySelectorAll('button')].filter(b=> (b.innerText||'').trim()==='Add Bonus'); const save=btns[btns.length-1]; if(save){ save.click(); return 'clicked:'+save.innerText.slice(0,30); } return 'no-btn'; }); }")
+                    sleep(1500)
+                except Exception as e:
+                    log_warn(f"save click failed {e}")
+                # Verify modal closed
+                for _ci in range(6):
+                    try:
+                        _still = eval_page("() => { const el=document.querySelector('input[placeholder=\"Enter bonus title\"]'); return el && el.offsetParent!==null ? 'open' : 'closed'; }")
+                        if "closed" in str(_still):
+                            log_info("Bonus modal closed")
+                            break
+                        if _ci == 2:
+                            cli(["press", "Escape"], allow_failure=True)
+                    except: pass
+                    sleep(500)
             except Exception as e:
                 log_warn(f"Bonus stub: {e}")
+                import traceback
+                log_warn(traceback.format_exc()[:900])
             click_continue_and_expect("Sweeps Info")
         def stub_sweeps():
             heading("Sweeps Info")
