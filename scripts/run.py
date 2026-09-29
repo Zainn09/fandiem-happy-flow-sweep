@@ -2019,19 +2019,48 @@ def main():
                     return JSON.stringify({drawer_open: !!open, drawer_exists: !!d, item_count: items.length});
                 }); }""")
                 log_info(f"Drawer state before verify: {drawer_state}")
-                # If drawer not open, try to open via cart icon button if exists
+                # If drawer not open, try to open via cart icon — try multiple selectors + JS open fallback
                 try:
                     _open_try = run_code("""async page => { return await page.evaluate(() => {
                         const d=document.querySelector('div.chazify-cart-drawer');
                         if(d && d.classList.contains('open')) return 'already-open';
-                        const btn=document.querySelector('button.chazify-cart-close, a[href="/cart"], button[aria-label*="cart" i]');
-                        const cartBtn=[...document.querySelectorAll('button, a')].find(b=> (b.getAttribute('aria-label')||'').toLowerCase().includes('cart') || (b.innerText||'').toLowerCase().includes('shopping cart'));
-                        if(cartBtn){ cartBtn.click(); return 'clicked-cart-btn';}
+                        // Try to find and click cart trigger — header cart icon often has href /cart or aria-label cart, or class chazify-cart
+                        let trigger = document.querySelector('a[href="/cart"]') 
+                            || document.querySelector('a[href*="/cart"]')
+                            || document.querySelector('button[aria-label*="cart" i]')
+                            || [...document.querySelectorAll('button, a')].find(b=> (b.getAttribute('aria-label')||'').toLowerCase().includes('cart'))
+                            || [...document.querySelectorAll('button, a')].find(b=> (b.innerText||'').toLowerCase().includes('cart'))
+                            || document.querySelector('[class*="cart"] button')
+                            || document.querySelector('header a[href="/cart"]');
+                        if(trigger){ trigger.click(); return 'clicked-trigger:'+ (trigger.tagName + (trigger.getAttribute('aria-label')||''));}
+                        // Fallback: force open via class if element exists but hidden
+                        if(d){ d.classList.add('open'); d.style.display='block'; return 'forced-open';}
                         return 'no-drawer-btn';
                     }); }""")
                     log_info(f"Drawer open attempt: {_open_try}")
-                    sleep(800)
-                except: pass
+                    sleep(1200)
+                    # If still not open, try CLI click on cart link as extra fallback
+                    if "no-drawer" in str(_open_try) or "forced" in str(_open_try):
+                        try:
+                            cli(["click", "locator('a[href=\"/cart\"]').first()"], allow_failure=True); sleep(1000)
+                        except: pass
+                        try:
+                            cli(["click", "locator('button:has-text(\"Cart\")').first()"], allow_failure=True); sleep(800)
+                        except: pass
+                    # Re-check state after attempt
+                    _recheck = run_code("""async page => { return await page.evaluate(() => {
+                        const d=document.querySelector('div.chazify-cart-drawer');
+                        return JSON.stringify({open: d&&d.classList.contains('open'), count: document.querySelectorAll('li.chazify-cart-item').length});
+                    }); }""")
+                    log_info(f"Drawer recheck after open: {_recheck}")
+                    # Final fallback: if still 0 items but cart.js has items, items are in cart but drawer closed — we will verify via /cart.js API as well
+                    try:
+                        _cartjs = run_code("""async page => { return await page.evaluate(async () => { try { const r=await fetch('/cart.js',{cache:'no-store'}); const j=await r.json(); return JSON.stringify({items: j.items.map(i=>({title:i.product_title, variant:i.variant_title, qty:i.quantity, price:(i.price/100).toFixed(2), line_price:(i.line_price/100).toFixed(2)})), item_count:j.item_count, total_price:(j.total_price/100).toFixed(2)}); } catch(e){ return JSON.stringify({error:String(e)});} }); }""")
+                        log_info(f"Cart.js API fallback: {_cartjs[:600]!r}")
+                    except Exception as _e:
+                        log_warn(f"cart.js fallback failed {_e}")
+                except Exception as e:
+                    log_warn(f"Drawer open failed {e}")
 
                 # Parse cart items as per your HTML snippet
                 cart_html = run_code("""async page => { return await page.evaluate(() => {
@@ -2062,6 +2091,28 @@ def main():
                 items = parsed.get("items", []) if isinstance(parsed, dict) else []
                 subtotal_str = parsed.get("subtotal","") if isinstance(parsed, dict) else ""
                 log_info(f"Cart items parsed {len(items)} subtotal {subtotal_str!r}")
+                # Fallback to /cart.js API if drawer DOM still 0 (drawer closed but cart has items)
+                if len(items) == 0:
+                    try:
+                        _fallback_raw = run_code("""async page => { return await page.evaluate(async () => { try { const r=await fetch('/cart.js',{cache:'no-store'}); const j=await r.json(); return JSON.stringify({items: j.items.map(i=>({title:i.product_title, variant:(i.variant_title||i.variant||''), qty:String(i.quantity), price:'$'+(i.line_price/100).toFixed(2), line_price:(i.line_price/100).toFixed(2)})), subtotal:'$'+(j.total_price/100).toFixed(2), subtotal_label: j.item_count+' items'}); } catch(e){ return JSON.stringify({error:String(e)});} }); }""")
+                        _fb_clean = str(_fallback_raw or "").strip()
+                        if len(_fb_clean) >=2 and _fb_clean[0] in ('"', "'") and _fb_clean[-1]==_fb_clean[0]:
+                            try:
+                                _inner = _jc.loads(_fb_clean)
+                                if isinstance(_inner, str):
+                                    _fb_clean = _inner
+                            except:
+                                _fb_clean = _fb_clean[1:-1]
+                        _fb_parsed = _jc.loads(_fb_clean or '{"items":[]}')
+                        if isinstance(_fb_parsed, str):
+                            _fb_parsed = _jc.loads(_fb_parsed)
+                        if isinstance(_fb_parsed, dict) and _fb_parsed.get("items"):
+                            items = _fb_parsed.get("items", [])
+                            if not subtotal_str:
+                                subtotal_str = _fb_parsed.get("subtotal","")
+                            log_info(f"Fallback cart.js items {len(items)} subtotal {subtotal_str!r} — using API data")
+                    except Exception as _fe:
+                        log_warn(f"cart.js fallback for 0 items failed {_fe}")
 
                 # Expected mapping entries -> price per your drawer HTML (qty 2 each):
                 # 100 entries $20 (=$10 each), 250 $50 (=$25), 1000 $100 (=$50), 2000 $200 (=$100), 5000 $500 (=$250), 10000 $1000 (=$500), 20000 $2000 (=$1000)
@@ -2072,7 +2123,7 @@ def main():
                 # Helper to parse price $1,000.00 -> float
                 def _price_num(s):
                     import re as _re
-                    m=_re.search(r"\\$?([0-9,]+\\.?[0-9]*)", str(s).replace(",",""))
+                    m=_re.search(r"\$?\s*([0-9,]+\.?[0-9]*)", str(s))
                     try:
                         return float(m.group(1).replace(",","")) if m else 0.0
                     except:
