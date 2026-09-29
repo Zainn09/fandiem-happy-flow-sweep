@@ -76,7 +76,25 @@ def ensure_playwright_attached():
 # Continuation mode: skip creation and continue from onwards (storefront/cart onwards)
 # Usage: python scripts/run.py --continue  or  python scripts/run.py --onwards  or  python scripts/run.py --continue=storefront
 #        SWEEP_TITLE="Fandiem-20250928-005" python scripts/run.py --continue
-is_continue_mode = any(a in ("--continue","--onwards","--resume","--from-onwards") or a.startswith("--continue=") or a.startswith("--from=") or a.startswith("--resume") for a in sys.argv)
+#        python scripts/run.py --continue --slug=qa-auto-fandiem-20260929-004  (your requested 2026-09-29 slug)
+#        python scripts/run.py --slug=qa-auto-fandiem-20260929-004  (implies --continue)
+#        SWEEP_TITLE=QA-AUTO-FANDIEM-20260929-004 python scripts/run.py --continue
+#        SLUG=qa-auto-fandiem-20260929-004 python scripts/run.py --continue
+_cli_slug = ""  # explicit slug from CLI/env — takes highest priority when continuing
+for _a in sys.argv:
+    if _a.startswith("--slug="): _cli_slug = _a.split("=",1)[1].strip()
+    elif _a.startswith("--sweep="): _cli_slug = _a.split("=",1)[1].strip()
+    elif _a.startswith("--title="): _cli_slug = _a.split("=",1)[1].strip()
+    elif re.match(r"^qa-auto-fandiem-\d{8}-\d+$", _a.strip(), re.I): _cli_slug = _a.strip()
+    elif re.match(r"^--qa-auto", _a.strip(), re.I): _cli_slug = _a.lstrip("-").strip()
+# env SLUG also allowed
+if not _cli_slug:
+    for _k in ("SLUG","CONTEST_ID","CONTESTID","SWEEP_SLUG"):
+        if os.environ.get(_k,"").strip():
+            _cli_slug = os.environ[_k].strip()
+            break
+# If slug provided without --continue, imply continue mode (continue from storefront)
+is_continue_mode = any(a in ("--continue","--onwards","--resume","--from-onwards") or a.startswith("--continue=") or a.startswith("--from=") or a.startswith("--resume") for a in sys.argv) or bool(_cli_slug)
 continue_from = "storefront"  # default onwards point = storefront/cart (after sweep created)
 for a in sys.argv:
     if a.startswith("--continue="): continue_from = a.split("=",1)[1].strip().lower()
@@ -91,7 +109,17 @@ def preview_title():
     except: pass
     return f"{config['sweepTitlePrefix']}-{yyyymmdd}-{n+1:03d} (preview)"
 def resolve_continue_title(fallback):
-    # Priority: SWEEP_TITLE env > results/report.json > results/latest sweepTitle > fallback
+    # Priority: --slug / SLUG env / SWEEP_TITLE env > results/report.json > fallback
+    # Your request 2026-09-29: use slug "qa-auto-fandiem-20260929-004" -> title "QA-AUTO-FANDIEM-20260929-004"
+    if _cli_slug:
+        # slug is lower-cased for URL but sweepTitle on admin/storefront is upper-cased
+        # e.g. qa-auto-fandiem-20260929-004 -> QA-AUTO-FANDIEM-20260929-004
+        t = _cli_slug.strip()
+        # if it looks like a slug (lower with dashes), convert to upper title for admin lookup
+        if t.lower().startswith("qa-auto"):
+            t = t.upper()
+        log_info(f"Continue mode: using --slug/SLUG title: {t} (slug {t.lower()})")
+        return t
     env_title = os.environ.get("SWEEP_TITLE","").strip()
     if env_title:
         log_info(f"Continue mode: using SWEEP_TITLE env: {env_title}")
