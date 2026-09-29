@@ -139,6 +139,52 @@ if report.get("storefrontChecks"):
     for c in report["storefrontChecks"]:
         print(f"  [{'OK  ' if c.get('present') else 'MISS'}] {'(required) ' if c.get('required') else '(recorded) '}{c.get('label')}: {truncate(c.get('expected'),70)}")
 
+if report.get("storefront"):
+    head("Storefront")
+    sf = report["storefront"]
+    kv("URL", sf.get("url"))
+    kv("Media count", len(sf.get("media") or []))
+    if sf.get("soft_misses"):
+        kv("Soft misses", ", ".join(sf["soft_misses"]))
+    if sf.get("soft_pass") is not None:
+        kv("Soft pass", sf.get("soft_pass"))
+
+if report.get("storefront_details"):
+    head("Storefront details & dynamic tabs")
+    sd = report["storefront_details"]
+    kv("Details OK", ", ".join(sd.get("details_ok") or []) or "—")
+    kv("Details miss", ", ".join(sd.get("details_miss") or []) or "—")
+    kv("Tabs OK", ", ".join(sd.get("tabs_ok") or []) or "—")
+    kv("Tabs miss", ", ".join(sd.get("tabs_miss") or []) or "—")
+    total_ok = len(sd.get("details_ok") or []) + len(sd.get("tabs_ok") or [])
+    total = len(sd.get("details_ok") or []) + len(sd.get("details_miss") or []) + len(sd.get("tabs_ok") or []) + len(sd.get("tabs_miss") or [])
+    kv("Coverage", f"{total_ok}/{total} soft OK" if total else "—")
+
+if report.get("cart_drawer"):
+    head("Cart drawer — subtotal / qty / remove / entries vs price")
+    cd = report["cart_drawer"]
+    kv("Items in drawer", len(cd.get("items") or []))
+    for it in (cd.get("items") or [])[:8]:
+        kv(f"  {it.get('variant')}", f"qty {it.get('qty')} price {it.get('price')} title {truncate(it.get('title'),30)}")
+    kv("Subtotal displayed", cd.get("subtotal"))
+    kv("Subtotal calc sum", cd.get("calc_total"))
+    kv("Subtotal OK", "PASS" if cd.get("subtotal_ok") else "FAIL")
+    if cd.get("price_checks"):
+        for pc in cd["price_checks"]:
+            kv(f"  {pc.get('variant')}", f"qty{pc.get('qty')} price {pc.get('price')} expected {pc.get('expected_total')} -> {'PASS' if pc.get('ok') else 'FAIL'}")
+    kv("Entries vs Price", "PASS" if cd.get("entries_price_ok") else "FAIL")
+    kv("Qty +1 updates total", "PASS" if cd.get("qty_update_ok") else "FAIL" if cd.get("qty_update_ok") is not None else "—")
+    kv("Remove updates cart", "PASS" if cd.get("remove_ok") else "FAIL" if cd.get("remove_ok") is not None else "—")
+
+if report.get("cart_drawer_error"):
+    head("Cart drawer error")
+    print(f"  {truncate(report['cart_drawer_error'], 300)}")
+
+if report.get("continueMode"):
+    head("Continue mode")
+    kv("Continue from", report.get("continueFrom"))
+    kv("Title reused", report.get("sweepTitle"))
+
 head("Result")
 print(f"  {report.get('status')}{(' — '+truncate(report.get('error'),200)) if report.get('error') else ''}")
 print(f"  report: {resultsDir / 'report.json'}")
@@ -146,3 +192,8 @@ if cart:
     print(f"  cart:   {resultsDir / 'cart-results.json'}")
     head("Cart buttons")
     print(f"  {len(cart)} buttons")
+    for c in cart:
+        ok = "PASS" if c.get("ok") else "FAIL"
+        idx = c.get('index')
+        idx_str = f"#{idx+1}" if isinstance(idx, int) else str(idx)
+        print(f"    [{ok}] {idx_str} {truncate(c.get('text'),40)} POST:{c.get('postCartObserved')} items:{c.get('itemCount')}")
