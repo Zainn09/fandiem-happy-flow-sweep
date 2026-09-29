@@ -1771,6 +1771,27 @@ def main():
                     if report.get("publicUrl"):
                         goto(report["publicUrl"])
                         sleep(1000)
+                # === NEW: Clear cart via https://fandiem.co/cart/clear before adding, then return to sweep ===
+                try:
+                    sweep_url = report.get("publicUrl") or publicUrl or f"https://fandiem.co/sweeps/{sweep_title.lower()}"
+                    log_info(f"Clearing cart via https://fandiem.co/cart/clear then returning to {sweep_url}")
+                    goto("https://fandiem.co/cart/clear")
+                    sleep(1500)
+                    # Verify cart cleared via /cart.js
+                    try:
+                        _clear_check = run_code("""async page => { return await page.evaluate(async () => { try { const r=await fetch('/cart.js',{cache:'no-store'}); const j=await r.json(); return JSON.stringify({item_count:j.item_count}); } catch(e){ return JSON.stringify({error:String(e)});} }); }""")
+                        log_info(f"Cart after clear: {_clear_check[:120]}")
+                    except: pass
+                    goto(sweep_url)
+                    sleep(1500)
+                    log_info("Returned to sweep after cart clear")
+                except Exception as e:
+                    log_warn(f"cart clear failed {e}, continuing anyway")
+                    try:
+                        if report.get("publicUrl"):
+                            goto(report["publicUrl"])
+                            sleep(1000)
+                    except: pass
                 rawCount = run_code("async page => { return await page.evaluate(() => String(document.querySelectorAll('button#add-to-cart-btn').length)); }")
                 count = int(''.join(filter(str.isdigit, str(rawCount))) or "0")
                 if count < 1:
