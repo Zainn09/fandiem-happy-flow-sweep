@@ -2421,14 +2421,22 @@ def main():
                     except: pass
                 sleep(400)
                 # Country dropdown — button with current country text, then search
+                # IMPORTANT: NEVER click search icon button.border-2.border-primary-200.rounded-full (magnifier) — stay on free entry form
                 try:
-                    # Click country button (first dropdown)
+                    # Click country button (first dropdown) — precise text match, not generic svg button
                     cli(["click", "locator('button:has-text(\"Andorra\")').first()"], allow_failure=True)
                     sleep(600)
-                    # If not Andorra visible, fallback to generic country button selector
+                    # If not Andorra visible, fallback to generic country button selector — EXCLUDE search button
                     if country != "Andorra":
-                        # The button shows current selected country (Andorra initially) — click it to open list
-                        run_code("""async page => { return await page.evaluate(() => { const btn=[...document.querySelectorAll('button')].find(b=> b.innerText.trim()==='Andorra' || b.innerText.includes('Andorra')); if(btn){btn.click(); return 'clicked-Andorra';} const any=[...document.querySelectorAll('button')].find(b=> b.innerText.trim().length<30 && b.querySelector('svg')); if(any){any.click(); return 'clicked-any';} return 'no-btn'; }); }""")
+                        run_code("""async page => { return await page.evaluate(() => {
+                            const isSearch = b => b.classList.contains('rounded-full') && b.classList.contains('border-primary-200') || b.querySelector('circle[cx="11"][cy="11"][r="8"]');
+                            let btn=[...document.querySelectorAll('button')].find(b=> !isSearch(b) && (b.innerText||'').trim()==='Andorra');
+                            if(btn){btn.click(); return 'clicked-Andorra';}
+                            // fallback: first non-search button that looks like a country selector (has text + svg chevron)
+                            const cands=[...document.querySelectorAll('button')].filter(b=> !isSearch(b) && (b.innerText||'').trim().length>1 && (b.innerText||'').trim().length<35 && b.querySelector('svg'));
+                            if(cands[0]){cands[0].click(); return 'clicked-cand:'+cands[0].innerText.trim().slice(0,20);}
+                            return 'no-btn';
+                        }); }""")
                         sleep(800)
                     # Search for country
                     run_code(f"""async page => {{ return await page.evaluate((c) => {{ const inp=document.querySelector('input[placeholder="Search..."]'); if(inp){{inp.focus(); inp.value=c; inp.dispatchEvent(new Event('input',{{bubbles:true}})); return 'searched:'+c;}} return 'no-search'; }}, {json.dumps(country)}) }}""")
@@ -2444,11 +2452,18 @@ def main():
                     except: pass
                 # State/Province dropdown — second dropdown after country (shows Canillo initially for Andorra)
                 try:
-                    # Click state button — it currently shows Canillo or Andorra la Vella etc
+                    # Click state button — it currently shows Canillo or Andorra la Vella etc — precise, exclude search magnifier
                     cli(["click", "locator('button:has-text(\"Canillo\")').first()"], allow_failure=True)
                     sleep(600)
-                    # Fallback generic: second country-like button
-                    run_code("""async page => { return await page.evaluate(() => { const btns=[...document.querySelectorAll('button')].filter(b=> b.innerText.trim().length<40 && b.querySelector('svg')); if(btns[1]){btns[1].click(); return 'clicked-state-btn';} return 'no-state-btn'; }); }""")
+                    # Fallback generic: second country-like button, EXCLUDE search button
+                    run_code("""async page => { return await page.evaluate(() => {
+                        const isSearch = b => b.classList.contains('rounded-full') && b.classList.contains('border-primary-200') || b.querySelector('circle[cx="11"][cy="11"][r="8"]');
+                        const cands=[...document.querySelectorAll('button')].filter(b=> !isSearch(b) && (b.innerText||'').trim().length>1 && (b.innerText||'').trim().length<40 && b.querySelector('svg'));
+                        // first cand is country, second is state
+                        if(cands[1]){cands[1].click(); return 'clicked-state-btn:'+cands[1].innerText.trim().slice(0,20);}
+                        if(cands[0]){cands[0].click(); return 'clicked-first-as-state:'+cands[0].innerText.trim().slice(0,20);}
+                        return 'no-state-btn';
+                    }); }""")
                     sleep(700)
                     run_code(f"""async page => {{ return await page.evaluate((s) => {{ const inp=document.querySelectorAll('input[placeholder="Search..."]')[1] || document.querySelector('input[placeholder="Search..."]'); if(inp){{inp.focus(); inp.value=s; inp.dispatchEvent(new Event('input',{{bubbles:true}})); return 'searched-state:'+s;}} return 'no-search-state'; }}, {json.dumps(state)}) }}""")
                     sleep(600)
@@ -2463,49 +2478,63 @@ def main():
                     if _rnd.random() < 0.5:
                         cli(["click", "locator('#newsletter')"], allow_failure=True); sleep(300)
                 except: pass
-                # Captcha handling — div id rc-anchor-container
+                # Captcha handling — div id rc-anchor-container — VERY CAREFUL, never click search button
+                # Stay on free entry form, handle recaptcha iframe precisely
                 try:
-                    # Check if captcha iframe present
                     _has_captcha = run_code("""async page => { return await page.evaluate(() => { return !!document.querySelector('iframe[title="reCAPTCHA"]') || !!document.querySelector('#rc-anchor-container'); }); }""")
                     log_info(f"Captcha present check: {_has_captcha}")
                     if "true" in str(_has_captcha).lower():
-                        # Try clicking the checkbox
                         try:
-                            # The checkbox is inside iframe, need to click via frame
-                            run_code("""async page => { return await page.evaluate(() => {
-                                const frame=document.querySelector('iframe[title="reCAPTCHA"]');
-                                if(frame) return 'has-frame:'+frame.src.slice(0,60);
-                                const anchor=document.querySelector('#recaptcha-anchor');
-                                if(anchor){ anchor.click(); return 'clicked-anchor';}
-                                return 'no-captcha-el';
-                            }); }""")
-                            sleep(1000)
-                            # Try CLI click on iframe checkbox via locator
-                            cli(["click", "locator('#recaptcha-anchor')"], allow_failure=True); sleep(800)
-                            # Also try clicking the container
-                            run_code("""async page => { return await page.evaluate(() => {
-                                const el=document.querySelector('.recaptcha-checkbox');
-                                if(el){ el.click(); return 'clicked-checkbox';}
-                                return 'no-checkbox';
-                            }); }""")
-                            sleep(1000)
-                            # Check for over-quota message
+                            log_info("Captcha: handling I'm not a robot — will target iframe frameLocator, not search magnifier")
+                            # Use Playwright frameLocator to click inside iframe — precise, safe
+                            run_code("""async page => {
+                                try{
+                                    const frame = page.frameLocator('iframe[title="reCAPTCHA"]');
+                                    const anchor = frame.locator('#recaptcha-anchor');
+                                    // Also check visible
+                                    const count = await anchor.count();
+                                    if(count>0){ await anchor.click({timeout: 5000}); return 'frame-clicked:'+count; }
+                                }catch(e){ return 'frame-click-failed:'+String(e).slice(0,120); }
+                                // fallback via JS frame content
+                                return await page.evaluate(() => {
+                                    const frame=document.querySelector('iframe[title="reCAPTCHA"]');
+                                    if(frame) return 'has-frame:'+(frame.src||'').slice(0,80);
+                                    const anchor=document.querySelector('#recaptcha-anchor');
+                                    if(anchor){ anchor.click(); return 'clicked-anchor-js';}
+                                    return 'no-captcha-el-js';
+                                });
+                            }""")
+                            sleep(1200)
+                            # Alternative precise click via evaluating inside iframe — never touches search button
+                            run_code("""async page => {
+                                return await page.evaluate(() => {
+                                    // Double-check we are NOT clicking the search magnifier
+                                    const searchBtn = document.querySelector('button.border-2.border-primary-200.rounded-full');
+                                    if(searchBtn) return 'search-btn-exists-skipped';
+                                    return 'search-skip-ok';
+                                });
+                            }""")
+                            sleep(800)
+                            # Check for over-quota message (site exceeding free quota)
                             _quota = run_code("""async page => { return await page.evaluate(() => {
                                 const el=document.querySelector('#rc-anchor-over-quota');
                                 const txt=(el && el.innerText)||'';
                                 const err=document.querySelector('.rc-anchor-error-msg');
-                                return JSON.stringify({quota:txt.slice(0,200), err: (err&&err.innerText)||''});
+                                const gResp=document.querySelector('textarea[name="g-recaptcha-response"]');
+                                return JSON.stringify({quota:txt.slice(0,200), err: (err&&err.innerText)||'', hasG: !!gResp, gLen: gResp? (gResp.value||'').length : 0});
                             }); }""")
-                            log_info(f"Captcha quota check: {_quota[:300]}")
+                            log_info(f"Captcha quota/g-response check: {_quota[:350]}")
                             if "exceeding" in str(_quota).lower() or "quota" in str(_quota).lower():
-                                log_warn(f"reCAPTCHA over quota — site exceeding free quota, cannot solve, will try submit anyway")
+                                log_warn(f"reCAPTCHA over quota — site exceeding free quota, cannot solve, will try submit anyway and stay on form")
+                            # Wait a bit for checkbox animation — stay on form
+                            sleep(1200)
                         except Exception as e:
-                            log_warn(f"Captcha click failed {e}")
-                        sleep(1500)
+                            log_warn(f"Captcha click failed {e} — staying on form")
+                        sleep(800)
                     else:
-                        log_info("No captcha found, proceeding")
+                        log_info("No captcha found, proceeding — stay on form")
                 except Exception as e:
-                    log_warn(f"Captcha handling failed {e}")
+                    log_warn(f"Captcha handling failed {e} — staying on form")
                 # Remember info for later admin verification
                 free_entry_data = {
                     "sweep_title": sweep_title, "slug": slug, "free_url": free_url,
@@ -2554,10 +2583,14 @@ def main():
                 # Don't raise — make step PASS with warning so continue flow not blocked
                 report["freeEntry_error"] = str(e)[:500]
                 write_json("free-entry.json", {"error": str(e)[:500], "sweep_title": sweep_title})
-            # Always ensure we return to sweep for next steps
+            # Stay on Free entry form after filling — DO NOT navigate away, DO NOT click search magnifier button
+            log_info(f"Staying on Free entry form {free_url} after fill — not clicking search button.border-primary-200.rounded-full, not navigating to sweep")
             try:
-                goto(report.get("publicUrl") or f"https://fandiem.co/sweeps/{slug}")
-                sleep(1500)
+                _still = current_url()
+                log_info(f"Current URL after free entry fill (should still be enterwithoutdonating): {_still[:120]}")
+                if "enterwithoutdonating" not in str(_still):
+                    log_warn(f"Not on free entry form after fill, navigating back to {free_url} and staying")
+                    goto(free_url); sleep(1500)
             except: pass
 
         step(report, "Fill Free Entry Form (random country/state, captcha, remember for admin)", lambda: fill_free_entry_form())
