@@ -94,12 +94,23 @@ if not _cli_slug:
             _cli_slug = os.environ[_k].strip()
             break
 # If slug provided without --continue, imply continue mode (continue from storefront)
-is_continue_mode = any(a in ("--continue","--onwards","--resume","--from-onwards") or a.startswith("--continue=") or a.startswith("--from=") or a.startswith("--resume") for a in sys.argv) or bool(_cli_slug)
+# New: --free / --free-entry / --from=freeentry goes DIRECTLY to Free Entry Form (no storefront/cart validation)
+# Usage requested 2026-09-29: python scripts/run.py --slug=qa-auto-fandiem-20260929-004 --from=freeentry
+#                           or python scripts/run.py --slug=qa-auto-fandiem-20260929-004 --free
+#                           or just --free-entry with slug
+_free_aliases = {"free","freeentry","free_entry","free-entry","free-entry-form","freeentryform","enterwithoutdonating","freentry","contest","freeform"}
+is_continue_mode = any(a in ("--continue","--onwards","--resume","--from-onwards","--free","--free-entry","--freeentry","--free_entry","--enterwithoutdonating") or a.startswith("--continue=") or a.startswith("--from=") or a.startswith("--resume") for a in sys.argv) or bool(_cli_slug)
 continue_from = "storefront"  # default onwards point = storefront/cart (after sweep created)
 for a in sys.argv:
-    if a.startswith("--continue="): continue_from = a.split("=",1)[1].strip().lower()
-    elif a.startswith("--from="): continue_from = a.split("=",1)[1].strip().lower()
+    if a.startswith("--continue="): continue_from = a.split("=",1)[1].strip().lower().replace("_","-").replace(" ","-")
+    elif a.startswith("--from="): continue_from = a.split("=",1)[1].strip().lower().replace("_","-").replace(" ","-")
+    elif a in ("--free","--free-entry","--freeentry","--free_entry","--enterwithoutdonating"): continue_from = "freeentry"
+# normalize free aliases
+if continue_from.replace("_","-") in _free_aliases or continue_from.replace("-","") in {"freeentry","freeentryform"}:
+    continue_from = "freeentry"
 is_dry_run = "--dry-run" in sys.argv
+_is_free_only = continue_from == "freeentry"
+_is_storefront_only = continue_from in ("storefront","cart","freeentry")  # freeentry handled separately
 def preview_title():
     if os.environ.get("SWEEP_TITLE","").strip(): return os.environ["SWEEP_TITLE"].strip()+" (preview)"
     now = datetime.now()
@@ -938,12 +949,19 @@ def main():
         if is_continue_mode:
             # Sweep created Successfully CONFIRMED — continue onwards (skip full creation)
             print(f"\n=== CONTINUE MODE ONWARDS ===")
-            print(f"Sweep created Successfully CONFIRMED — continuing from '{continue_from}' with title: {sweep_title}")
-            print(f"Skipping full Sweep creation from start. Use without --continue to create fresh Sweep.\n")
+            print(f"Sweep created Successfully CONFIRMED — continuing from '{continue_from}' with title: {sweep_title} slug {sweep_title.lower()}")
+            if _is_free_only:
+                print(f"FREE ENTRY ONLY mode — skipping ALL storefront/cart validation, going directly to https://fandiem.co/pages/enterwithoutdonating?contestId={sweep_title.lower()}\n")
+            else:
+                print(f"Skipping full Sweep creation from start. Use without --continue to create fresh Sweep.\n")
             ensure_playwright_attached()
             # For default onwards (storefront), we still need to be on admin to find sweeps link
             # Jump directly to storefront/cart unless continue_from explicitly says otherwise
-            if continue_from in ("create","createsweeps","review","sweepsinfo","sweeps","tracking","visibility"):
+            if _is_free_only:
+                print(f"[info] FREE ENTRY ONLY — no admin nav, will open enterwithoutdonating directly")
+                # No need to go to admin; free entry uses slug URL directly
+                pass
+            elif continue_from in ("create","createsweeps","review","sweepsinfo","sweeps","tracking","visibility"):
                 print(f"[info] Continuing from {continue_from} — will run creation onwards steps")
                 # Go to admin sweeps list first so sweeps_row_snapshot can find the sweep
                 try:
@@ -1913,8 +1931,15 @@ def main():
                 log_warn(_tb.format_exc()[:800])
                 raise
 
-        step(report, "Open created sweep storefront", lambda: open_storefront())
-        step(report, "Exercise every add-to-cart button", lambda: exercise_cart())
+        # Dispatch based on continue_from — FREE ENTRY ONLY skips all storefront/cart validation
+        if _is_free_only:
+            print(f"\n[info] FREE ENTRY ONLY — skipping Open storefront / Exercise cart / Verify details / Verify cart drawer")
+            for _n in ["Open created sweep storefront","Exercise every add-to-cart button","Verify storefront details and dynamic tabs","Verify cart drawer calculations"]:
+                report["steps"].append({"name": _n, "status": "SKIPPED (free-entry-only)", "durationMs": 0})
+                print(f"[SKIPPED] {_n} (free-entry-only)")
+        else:
+            step(report, "Open created sweep storefront", lambda: open_storefront())
+            step(report, "Exercise every add-to-cart button", lambda: exercise_cart())
 
         # === NEW: Detailed storefront + cart drawer verification as per cart drawer HTML ===
         def verify_storefront_details_and_tabs():
@@ -2279,41 +2304,50 @@ def main():
                 log_warn(_tb.format_exc()[:800])
                 report["cart_drawer_error"] = str(e)[:500]
 
-        step(report, "Verify storefront details and dynamic tabs", lambda: verify_storefront_details_and_tabs())
-        step(report, "Verify cart drawer calculations", lambda: verify_cart_drawer_calculations())
+        if not _is_free_only:
+            step(report, "Verify storefront details and dynamic tabs", lambda: verify_storefront_details_and_tabs())
+            step(report, "Verify cart drawer calculations", lambda: verify_cart_drawer_calculations())
+        else:
+            # already marked SKIPPED above — still ensure report fields exist but empty
+            report["storefront_skipped"] = True
+            report["cart_skipped"] = True
 
         def fill_free_entry_form():
             # Free entry form https://fandiem.co/pages/enterwithoutdonating?contestId=<slug>
             # slug is lowercased sweep_title, e.g., qa-auto-fandiem-20260929-004
-            # Found via div.relative.space-y-4 or direct constructing URL
+            # Found via div.relative.space-y-4 or direct constructing URL — when _is_free_only skip DOM probe
             import random as _rnd, string as _str
             slug = sweep_title.lower()
-            # Try to find free entry link on storefront first via DOM for pattern verification
-            try:
-                cur = current_url()
-                if "fandiem.co/sweeps" not in cur and report.get("publicUrl"):
-                    goto(report["publicUrl"]); sleep(1500)
-            except: pass
             free_url = None
-            try:
-                # Try find via relative space-y-4 div as you described
-                _found = run_code("""async page => { return await page.evaluate(() => {
-                    let a = document.querySelector('div.relative.space-y-4 a[href*="enterwithoutdonating"]');
-                    if(a) return a.href;
-                    a = document.querySelector('a[aria-label="Free entry link"]');
-                    if(a) return a.href;
-                    a = [...document.querySelectorAll('a')].find(x=> (x.href||'').includes('enterwithoutdonating'));
-                    return a ? a.href : '';
-                }); }""")
-                _found_clean = str(_found or "").strip().strip('"').strip("'")
-                if "enterwithoutdonating" in _found_clean and "contestId" in _found_clean:
-                    free_url = _found_clean
-                    log_info(f"Found free entry link via DOM (relative space-y-4): {free_url}")
-            except Exception as e:
-                log_warn(f"DOM free entry find failed {e}")
-            if not free_url:
+            if _is_free_only:
                 free_url = f"https://fandiem.co/pages/enterwithoutdonating?contestId={slug}"
-                log_info(f"Using constructed free entry URL: {free_url} (pattern contestId=slug)")
+                log_info(f"FREE ENTRY ONLY — direct URL: {free_url} (skip div.relative.space-y-4 probe)")
+            else:
+                # Try to find free entry link on storefront first via DOM for pattern verification
+                try:
+                    cur = current_url()
+                    if "fandiem.co/sweeps" not in cur and report.get("publicUrl"):
+                        goto(report["publicUrl"]); sleep(1500)
+                except: pass
+                try:
+                    # Try find via relative space-y-4 div as you described
+                    _found = run_code("""async page => { return await page.evaluate(() => {
+                        let a = document.querySelector('div.relative.space-y-4 a[href*="enterwithoutdonating"]');
+                        if(a) return a.href;
+                        a = document.querySelector('a[aria-label="Free entry link"]');
+                        if(a) return a.href;
+                        a = [...document.querySelectorAll('a')].find(x=> (x.href||'').includes('enterwithoutdonating'));
+                        return a ? a.href : '';
+                    }); }""")
+                    _found_clean = str(_found or "").strip().strip('"').strip("'")
+                    if "enterwithoutdonating" in _found_clean and "contestId" in _found_clean:
+                        free_url = _found_clean
+                        log_info(f"Found free entry link via DOM (relative space-y-4): {free_url}")
+                except Exception as e:
+                    log_warn(f"DOM free entry find failed {e}")
+                if not free_url:
+                    free_url = f"https://fandiem.co/pages/enterwithoutdonating?contestId={slug}"
+                    log_info(f"Using constructed free entry URL: {free_url} (pattern contestId=slug)")
             # Navigate to form
             try:
                 tab_new(free_url)
