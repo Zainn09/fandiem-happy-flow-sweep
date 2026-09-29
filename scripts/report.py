@@ -180,6 +180,32 @@ if report.get("cart_drawer_error"):
     head("Cart drawer error")
     print(f"  {truncate(report['cart_drawer_error'], 300)}")
 
+if report.get("freeEntry"):
+    head("Free entry form — https://fandiem.co/pages/enterwithoutdonating?contestId=<slug>")
+    fe = report["freeEntry"]
+    kv("URL", fe.get("free_url"))
+    kv("Slug", fe.get("slug"))
+    kv("Name", f"{fe.get('firstName')} {fe.get('lastName')}")
+    kv("Email", fe.get("email"))
+    kv("Phone", fe.get("phone"))
+    kv("Address", f"{fe.get('address1')} {fe.get('apartment')}")
+    kv("Country", fe.get("country"))
+    kv("State/Province", fe.get("state"))
+    kv("City", fe.get("city"))
+    kv("ZIP", fe.get("zip"))
+    kv("Note", "Random each run for admin verification — see results/free-entry.json")
+    print(f"  Remember info for admin panel verification: {fe.get('email')} / {fe.get('phone')}")
+    print(f"  raw: {resultsDir / 'free-entry.json'}")
+    if fe.get("captcha_over_quota"):
+        print(f"  Captcha: site exceeding reCAPTCHA quota — clicked I'm not a robot, may need manual verify")
+
+if report.get("freeEntry_error"):
+    head("Free entry error")
+    print(f"  {truncate(report['freeEntry_error'], 400)}")
+    je = read_json("free-entry.json")
+    if je and je.get("error"):
+        print(f"  free-entry.json: {truncate(je.get('error'), 300)}")
+
 if report.get("continueMode"):
     head("Continue mode")
     kv("Continue from", report.get("continueFrom"))
