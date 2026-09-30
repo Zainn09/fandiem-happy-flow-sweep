@@ -635,18 +635,21 @@ def fill_campaign_info(report):
         except: pass
     galleryOrder=[]
     strategies=[]
-    # Cover — dynamic, not hardcoded — upload Campaign Info cover image via div.group (uncommented as requested)
-    try:
-        before=gallery_tile_count()
-        log_info("Cover: HTML shows div.group with input without multiple, trying precise (uncommented, dynamic)")
-        reveal_file_inputs(); sleep(500)
-        res=attempt_upload(drop_target='locator(\'div.group:has(input[type="file"])\').first()', click_target='locator(\'div.group:has-text("Drag & drop or click to upload")\').first()', input_nth=0, abs_paths=coverMedia, label="Cover")
-        strategies.append({"slot":"cover", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [])]})
-        report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"strategy":res["strategy"]}
-        log_info(f"cover tiles {before}->{res.get('tiles')}")
-    except Exception as e:
-        log_warn(f"cover upload failed (optional): {str(e).splitlines()[0]}")
-        report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"error":str(e).splitlines()[0]}
+    # Cover — commented (as you just requested — was uncommented in last fix, now re-commented)
+    # To re-enable: uncomment the try block below
+    # try:
+    #     before=gallery_tile_count()
+    #     log_info("Cover: HTML shows div.group with input without multiple, trying precise")
+    #     reveal_file_inputs(); sleep(500)
+    #     res=attempt_upload(drop_target='locator(\'div.group:has(input[type="file"])\').first()', click_target='locator(\'div.group:has-text("Drag & drop or click to upload")\').first()', input_nth=0, abs_paths=coverMedia, label="Cover")
+    #     strategies.append({"slot":"cover", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [])]})
+    #     report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"strategy":res["strategy"]}
+    #     log_info(f"cover tiles {before}->{res.get('tiles')}")
+    # except Exception as e:
+    #     log_warn(f"cover upload failed (optional): {str(e).splitlines()[0]}")
+    #     report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"error":str(e).splitlines()[0]}
+    log_info("Cover upload SKIPPED — commented as requested (focus on space-y-2 Media Gallery)")
+    report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"skipped":True,"reason":"commented as requested — media gallery >1 images only"}
     # Gallery - ensure visible
     try:
         log_info("Scrolling to ensure gallery visible")
