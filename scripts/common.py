@@ -171,8 +171,19 @@ def next_daily_number():
     return yyyymmdd, n
 
 def build_sweep_title():
-    override = os.environ.get("SWEEP_TITLE", "").strip()
-    if override: return override
+    # Never hardcode — always dynamic PKT date + daily counter
+    # SWEEP_TITLE env is only honored in continue/free-entry mode via resolve_continue_title, not for fresh creation
+    # (previous override caused QA-AUTO-FANDIEM-20260929-004 to persist when env was left set)
+    pass_override = os.environ.get("SWEEP_TITLE", "").strip()
+    if pass_override:
+        # Only use override if explicitly continuing (don't hardcode for fresh sweep)
+        # Check argv for continue/free flags — otherwise ignore to keep dynamic
+        _args = " ".join(sys.argv)
+        if any(k in _args for k in ("--continue","--from","--free","--slug","--sweep","--title","--resume")):
+            return pass_override
+        # Fresh creation: ignore hardcoded env and generate dynamic
+        import sys as _sys  # already imported at top, but ensure
+        print(f"[info] SWEEP_TITLE env '{pass_override}' ignored for fresh creation — using dynamic PKT date")
     yyyymmdd, n = next_daily_number()
     return f"{config['sweepTitlePrefix']}-{yyyymmdd}-{n:03d}"
 
