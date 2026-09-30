@@ -912,7 +912,7 @@ def fill_partners(report):
         fill_first_available(['locator(\'input[name="charitySetup.charitySubtitle"]\')','locator(\'textarea[name="charitySetup.charitySubtitle"]\')','locator(\'input[placeholder="Fighting childhood cancer, one child at a time."]\').first()'], charitySubtitle, "charitySubtitle")
     except Exception as e:
         log_warn(f"charitySubtitle JS: {e}")
-        run_code(f"async page => {{ const i=[...document.querySelectorAll('input, textarea')].find(x=>(x.placeholder||'').includes('Fighting childhood'))||[...document.querySelectorAll('input')].find(x=>x.name&&x.name.includes('charitySubtitle')); if(!i) return 'no-input'; i.focus(); i.value={json.dumps(charitySubtitle)}; i.dispatchEvent(new Event('input',{{bubbles:true}})); return 'ok'; }}")
+        run_code(f"async page => {{ return await page.evaluate((val) => {{ const i=[...document.querySelectorAll('input, textarea')].find(x=>(x.placeholder||'').includes('Fighting childhood'))||[...document.querySelectorAll('input')].find(x=>x.name&&x.name.includes('charitySubtitle')); if(!i) return 'no-input'; i.focus(); i.value=val; i.dispatchEvent(new Event('input',{{bubbles:true}})); return 'ok'; }}, {json.dumps(charitySubtitle)}) }}")
     report["selections"]={"talent":talent,"charity":charity,"artistQuoteTitle":artistQuoteTitle,"artistQuote":artistQuote,"charitySubtitle":charitySubtitle}
 
 # Minimal stubs for remaining steps to keep flow PASS - reuse Node logic via python helpers where possible
