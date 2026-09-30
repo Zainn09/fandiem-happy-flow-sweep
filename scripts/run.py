@@ -110,7 +110,12 @@ _is_free_only = continue_from == "freeentry"
 _is_storefront_only = continue_from in ("storefront","cart","freeentry")  # freeentry handled separately
 def preview_title():
     if os.environ.get("SWEEP_TITLE","").strip(): return os.environ["SWEEP_TITLE"].strip()+" (preview)"
-    now = datetime.now()
+    # PKT dynamic (no hardcoding)
+    from datetime import timezone as _tz, timedelta as _td
+    try:
+        now = datetime.now(_tz(_td(hours=5)))
+    except:
+        now = datetime.now()
     yyyymmdd = f"{now.year}{now.month:02d}{now.day:02d}"
     n=0
     try: n=int(json.loads((resultsDir / f"run-counter-{yyyymmdd}.json").read_text(encoding="utf-8")).get("count",0))
@@ -121,7 +126,7 @@ def resolve_continue_title(fallback):
     # Dynamic: fallback = build_sweep_title() => {prefix}-YYYYMMDD-NNN for TODAY + run counter for that day (no hardcoding)
     if _cli_slug:
         # slug is lower-cased for URL but sweepTitle on admin/storefront is upper-cased
-        # e.g. qa-auto-fandiem-20260929-004 -> QA-AUTO-FANDIEM-20260929-004
+        # e.g. qa-auto-fandiem-YYYYMMDD-NNN -> QA-AUTO-FANDIEM-YYYYMMDD-NNN (dynamic)
         t = _cli_slug.strip()
         # if it looks like a slug (lower with dashes), convert to upper title for admin lookup
         if t.lower().startswith("qa-auto"):
@@ -1732,7 +1737,7 @@ def main():
                 sleep(1800)
                 body = body_text()
                 # === Simplified storefront verification: hard title, soft everything else, never fail on dash/whitespace ===
-                # Your sweep was created with sweep_title = QA-AUTO-FANDIEM-20260929-004, so title must be on fandiem.co/sweeps page
+                # Your sweep was created with sweep_title = {prefix}-YYYYMMDD-NNN (dynamic today's date), so title must be on fandiem.co/sweeps page
                 assert_contains(body, sweep_title, "Storefront title")
                 log_info(f"Storefront title OK: {sweep_title!r}")
                 # Soft checks — everything added in Admin should appear on storefront if present, but we warn not fail
@@ -2170,7 +2175,7 @@ def main():
                     qty = int(''.join(filter(str.isdigit, str(it.get("qty") or "0"))) or 0)
                     price_val = _price_num(it.get("price"))
                     title = it.get("title") or ""
-                    # For sweep items, title is QA-AUTO-FANDIEM-20260929-004
+                    # For sweep items, title is {prefix}-YYYYMMDD-NNN (dynamic)
                     # Entries vs price check: if variant in expected_map, price should be expected_map[variant] * qty (or total)
                     # In your HTML, price shown is total for qty (e.g., 20000 entries qty2 price $2000 = 1000*2)
                     exp_per = expected_map.get(variant, None)
@@ -2307,7 +2312,7 @@ def main():
 
         def fill_free_entry_form():
             # Free entry form https://fandiem.co/pages/enterwithoutdonating?contestId=<slug>
-            # slug is lowercased sweep_title, e.g., qa-auto-fandiem-20260929-004
+            # slug is lowercased sweep_title, e.g., qa-auto-fandiem-YYYYMMDD-NNN (dynamic)
             # Found via div.relative.space-y-4 or direct constructing URL — when _is_free_only skip DOM probe
             import random as _rnd, string as _str
             slug = sweep_title.lower()

@@ -152,8 +152,15 @@ def resolve_asset(rel):
 def resolve_assets(lst): return [resolve_asset(p) for p in (lst or [])]
 
 def next_daily_number():
-    now = time.localtime()
-    yyyymmdd = f"{now.tm_year}{now.tm_mon:02d}{now.tm_mday:02d}"
+    # Dynamic per user's local date (Asia/Karachi PKT) — not hardcoded
+    # PKT is UTC+5, container is UTC, so use PKT date for YYYYMMDD
+    from datetime import timezone, timedelta, datetime as _dt
+    try:
+        pkt = _dt.now(timezone(timedelta(hours=5)))
+        yyyymmdd = pkt.strftime("%Y%m%d")
+    except:
+        now = time.localtime()
+        yyyymmdd = f"{now.tm_year}{now.tm_mon:02d}{now.tm_mday:02d}"
     f = resultsDir / f"run-counter-{yyyymmdd}.json"
     n = 0
     try:
