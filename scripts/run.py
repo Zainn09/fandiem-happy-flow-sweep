@@ -213,9 +213,14 @@ def click_first(targets, label):
     raise RuntimeError(f"Could not click {label}. Tried: {safe_join(targets,' | ')}")
 
 def click_continue_and_expect(expected):
-    # Dismiss any modal/banner that blocks clicks (Playwright extension banner)
+    # Dismiss any modal/banner/listbox that blocks CONTINUE (Playwright banner + charity listbox that stays open after multi-select)
+    for _ in range(2):
+        try: cli(["press", "Escape"], allow_failure=True); sleep(250)
+        except: pass
     try:
-        cli(["press", "Escape"], allow_failure=True); sleep(300)
+        # If charity listbox still open (100X selected but dropdown visible as in your screenshot), hide it
+        run_code("async page => { return await page.evaluate(() => { const lb=document.querySelector('[role=\"listbox\"]'); if(lb && lb.offsetParent!==null){ lb.style.display='none'; return 'hid-charity-lb'; } return 'no-lb'; }); }")
+        sleep(300)
     except: pass
     try:
         run_code("async page => { return await page.evaluate(() => { const b=[...document.querySelectorAll('button')].find(x=>/CONTINUE/.test(x.innerText||'')); if(b){ b.scrollIntoView({block:'center'}); return 'scrolled:'+b.innerText.slice(0,30);} return 'no-btn'; }); }"); sleep(400)
@@ -913,6 +918,21 @@ def fill_partners(report):
     except Exception as e:
         log_warn(f"charitySubtitle JS: {e}")
         run_code(f"async page => {{ return await page.evaluate((val) => {{ const i=[...document.querySelectorAll('input, textarea')].find(x=>(x.placeholder||'').includes('Fighting childhood'))||[...document.querySelectorAll('input')].find(x=>x.name&&x.name.includes('charitySubtitle')); if(!i) return 'no-input'; i.focus(); i.value=val; i.dispatchEvent(new Event('input',{{bubbles:true}})); return 'ok'; }}, {json.dumps(charitySubtitle)}) }}")
+    # Charity multi-select dropdown stays open after picking 100X (screenshot shows listbox still open with checkmark) — must close before CONTINUE
+    try:
+        # Close any open listbox that blocks CONTINUE (charity allows multiple, stays open)
+        for _esc in range(2):
+            cli(["press", "Escape"], allow_failure=True); sleep(400)
+        run_code("async page => { return await page.evaluate(() => { const lb=document.querySelector('[role=\"listbox\"]'); if(lb) lb.style.display='none'; return 'hid-lb:'+!!lb; }); }")
+        sleep(300)
+        # Click outside to dismiss overlay (body) — ensure CONTINUE is reachable
+        run_code("async page => { return await page.evaluate(() => { document.body.click(); return 'clicked-body'; }); }")
+        sleep(400)
+        # Verify closed
+        _lb = run_code("async page => { return await page.evaluate(() => !!document.querySelector('[role=\"listbox\"]') && document.querySelector('[role=\"listbox\"]').offsetParent!==null ? 'open' : 'closed'); }")
+        log_info(f"Charity dropdown after close: {_lb}")
+    except Exception as _e:
+        log_warn(f"charity dropdown close failed {_e}")
     report["selections"]={"talent":talent,"charity":charity,"artistQuoteTitle":artistQuoteTitle,"artistQuote":artistQuote,"charitySubtitle":charitySubtitle}
 
 # Minimal stubs for remaining steps to keep flow PASS - reuse Node logic via python helpers where possible
