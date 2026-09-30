@@ -74,12 +74,11 @@ def ensure_playwright_attached():
 
 # ---------- data ----------
 # Continuation mode: skip creation and continue from onwards (storefront/cart onwards)
-# Usage: python scripts/run.py --continue  or  python scripts/run.py --onwards  or  python scripts/run.py --continue=storefront
-#        SWEEP_TITLE="Fandiem-20250928-005" python scripts/run.py --continue
-#        python scripts/run.py --continue --slug=qa-auto-fandiem-20260929-004  (your requested 2026-09-29 slug)
-#        python scripts/run.py --slug=qa-auto-fandiem-20260929-004  (implies --continue)
-#        SWEEP_TITLE=QA-AUTO-FANDIEM-20260929-004 python scripts/run.py --continue
-#        SLUG=qa-auto-fandiem-20260929-004 python scripts/run.py --continue
+# Naming convention (dynamic, not hardcoded): sweepTitle = {sweepTitlePrefix}-YYYYMMDD-NNN
+#   e.g., QA-AUTO-FANDIEM-YYYYMMDD-001 — today's date + run count for that day via build_sweep_title() (no hardcoding)
+# Usage: py scripts/run.py                          (creates new sweep with TODAY's dynamic title)
+#        py scripts/run.py --continue                (reuses last dynamic sweep from results/report.json)
+#        py scripts/run.py --free-entry              (direct to free-entry for last dynamic sweep, slug = title.lower())
 _cli_slug = ""  # explicit slug from CLI/env — takes highest priority when continuing
 for _a in sys.argv:
     if _a.startswith("--slug="): _cli_slug = _a.split("=",1)[1].strip()
@@ -93,11 +92,9 @@ if not _cli_slug:
         if os.environ.get(_k,"").strip():
             _cli_slug = os.environ[_k].strip()
             break
-# If slug provided without --continue, imply continue mode (continue from storefront)
-# New: --free / --free-entry / --from=freeentry goes DIRECTLY to Free Entry Form (no storefront/cart validation)
-# Usage requested 2026-09-29: python scripts/run.py --slug=qa-auto-fandiem-20260929-004 --from=freeentry
-#                           or python scripts/run.py --slug=qa-auto-fandiem-20260929-004 --free
-#                           or just --free-entry with slug
+# If slug provided without --continue, imply continue mode (dynamic title otherwise)
+# --free / --free-entry / --from=freeentry goes DIRECTLY to Free Entry Form (no storefront/cart)
+# Dynamic naming: when --slug not given, title is built as {prefix}-YYYYMMDD-NNN for TODAY + run count (no hardcoding)
 _free_aliases = {"free","freeentry","free_entry","free-entry","free-entry-form","freeentryform","enterwithoutdonating","freentry","contest","freeform"}
 is_continue_mode = any(a in ("--continue","--onwards","--resume","--from-onwards","--free","--free-entry","--freeentry","--free_entry","--enterwithoutdonating") or a.startswith("--continue=") or a.startswith("--from=") or a.startswith("--resume") for a in sys.argv) or bool(_cli_slug)
 continue_from = "storefront"  # default onwards point = storefront/cart (after sweep created)
@@ -120,8 +117,8 @@ def preview_title():
     except: pass
     return f"{config['sweepTitlePrefix']}-{yyyymmdd}-{n+1:03d} (preview)"
 def resolve_continue_title(fallback):
-    # Priority: --slug / SLUG env / SWEEP_TITLE env > results/report.json > fallback
-    # Your request 2026-09-29: use slug "qa-auto-fandiem-20260929-004" -> title "QA-AUTO-FANDIEM-20260929-004"
+    # Priority: --slug / SLUG env / SWEEP_TITLE env > results/report.json > fallback (dynamic TODAY's title)
+    # Dynamic: fallback = build_sweep_title() => {prefix}-YYYYMMDD-NNN for TODAY + run counter for that day (no hardcoding)
     if _cli_slug:
         # slug is lower-cased for URL but sweepTitle on admin/storefront is upper-cased
         # e.g. qa-auto-fandiem-20260929-004 -> QA-AUTO-FANDIEM-20260929-004
@@ -633,21 +630,18 @@ def fill_campaign_info(report):
         except: pass
     galleryOrder=[]
     strategies=[]
-    # Cover - SKIPPED per user request: not required, focus on space-y-2 Media Gallery one-by-one
-    # Previous Cover code commented out:
-    # try:
-    #     before=gallery_tile_count()
-    #     log_info("Cover: HTML shows div.group with input without multiple, trying precise")
-    #     reveal_file_inputs(); sleep(500)
-    #     res=attempt_upload(drop_target='locator(\'div.group:has(input[type="file"])\').first()', click_target='locator(\'div.group:has-text("Drag & drop or click to upload")\').first()', input_nth=0, abs_paths=coverMedia, label="Cover")
-    #     strategies.append({"slot":"cover", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [])]})
-    #     report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"strategy":res["strategy"]}
-    #     log_info(f"cover tiles {before}->{res.get('tiles')}")
-    # except Exception as e:
-    #     log_warn(f"cover upload failed (optional): {str(e).splitlines()[0]}")
-    #     report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"error":str(e).splitlines()[0]}
-    log_info("Cover upload SKIPPED - not required, focusing on space-y-2 Media Gallery")
-    report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"skipped":True,"reason":"user requested space-y-2 gallery only"}
+    # Cover — dynamic, not hardcoded — upload Campaign Info cover image via div.group (uncommented as requested)
+    try:
+        before=gallery_tile_count()
+        log_info("Cover: HTML shows div.group with input without multiple, trying precise (uncommented, dynamic)")
+        reveal_file_inputs(); sleep(500)
+        res=attempt_upload(drop_target='locator(\'div.group:has(input[type="file"])\').first()', click_target='locator(\'div.group:has-text("Drag & drop or click to upload")\').first()', input_nth=0, abs_paths=coverMedia, label="Cover")
+        strategies.append({"slot":"cover", **res, "files":[pathlib.Path(f).name for f in (res.get("files") or [])]})
+        report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"strategy":res["strategy"]}
+        log_info(f"cover tiles {before}->{res.get('tiles')}")
+    except Exception as e:
+        log_warn(f"cover upload failed (optional): {str(e).splitlines()[0]}")
+        report["media"]["cover"]={"files":[pathlib.Path(f).name for f in coverMedia],"error":str(e).splitlines()[0]}
     # Gallery - ensure visible
     try:
         log_info("Scrolling to ensure gallery visible")
@@ -661,13 +655,12 @@ def fill_campaign_info(report):
             sleep(800)
     except Exception as e:
         log_warn(f"Gallery scroll failed: {e}")
-    # Media Gallery: ONE-BY-ONE in div.space-y-2 per user request (Cover skipped)
-    # Previous batch logic replaced: now upload each galleryMedia image individually into space-y-2
+    # Media Gallery: ONE-BY-ONE in div.space-y-2 — dynamic order, all images (uncommented as requested)
     # HTML: div.space-y-2 contains Media Gallery heading + div.grid > button Add media + input[multiple]
-    # Requirement: preserve order exactly as galleryMedia (bigfolio-teamwork.jpg -> nectar-610.webp -> fandiem-610.webp)
+    # Requirement: preserve order exactly as galleryMedia (all config images in order, no hardcoding)
     gallery_targets={'drop':'locator(\'div.space-y-2\').first()','click':'locator(\'div.space-y-2 button:has-text("Add media")\').first()'}
-    # Use exactly galleryMedia (3 CDN images in order) - no batch, one-by-one into space-y-2
-    gallery_batch = galleryMedia[:1]  # TEMP single image only - other 2 commented out as requested
+    # Use ALL galleryMedia images in order — dynamic per config, not hardcoded to 1
+    gallery_batch = galleryMedia  # all images (uncommented, dynamic)
     # Ensure gallery container visible before any upload - target space-y-2
     try:
         run_code("async page => { const g=document.querySelector('div.space-y-2'); if(g) g.scrollIntoView({behavior:'instant',block:'center'}); else { const b=[...document.querySelectorAll('button')].find(x=>(x.innerText||'').includes('Add media')); if(b) b.scrollIntoView({behavior:'instant',block:'center'}); } return 'scrolled-space-y-2'; }")
